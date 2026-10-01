@@ -10,7 +10,13 @@ import onnxruntime as ort
 CAM_LEFT_ID = 1
 CAM_RIGHT_ID = 2
 
-MODEL_PATH = "Models/middlebury_d400/saved_model_480x640/model_float32.onnx"
+# Model downloaded from https://www.google.com/url?sa=E&q=https%3A%2F%2Fs3.ap-northeast-2.wasabisys.com%2Fpinto-model-zoo%2F142_HITNET%2Fresources.tar.gz
+# and saved in ./Models
+# Model         | Environment             | Typical Max Disparity   | Recommendation
+# Middlebury    | Indoor / Desktop / Lab  | High (~400 px)          | Best for indoor webcam setups
+# ETH3D         | Outdoor / Natural Light | Low-Medium (~64 px)     | Best for long-range / outdoor robotics
+# FlyingThings3D| General / Synthetic     | Medium-High             | Baseline pre-trained model
+MODEL_PATH = "Models/middlebury_d400/saved_model_480x640/model_float32.onnx" 
 
 CALIB_PATH = "./Calibration/stereo_calibration_fixed.yml"
 if not os.path.exists(CALIB_PATH):
