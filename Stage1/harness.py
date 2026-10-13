@@ -273,6 +273,13 @@ class StereoPipeline:
         self.gpu_ids = gpu_ids if gpu_ids is not None and len(gpu_ids) > 0 else [0]
         self.is_multigpu = len(self.gpu_ids) > 1
 
+        stage1_dir = Path(__file__).resolve().parent
+        m_path = Path(model_path)
+        if not m_path.is_absolute() and not m_path.exists():
+            candidate = stage1_dir / model_path
+            if candidate.exists():
+                model_path = str(candidate)
+
         # Initialize estimators dictionary (3 estimators: CREStereo, SGBM, HITNet)
         primary_gpu = self.gpu_ids[0]
         self.estimators: dict[str, BaseStereoEstimator] = {

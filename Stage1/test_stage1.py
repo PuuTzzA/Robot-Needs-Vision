@@ -144,6 +144,31 @@ def test_deep_crestereo() -> None:
     print(f"✓ Disparity range: min={np.nanmin(disparity):.1f}px, max={np.nanmax(disparity):.1f}px")
 
 
+def test_hitnet() -> None:
+    print("\n--- [Test 5] Testing HITNet (CUDA/ONNX) ---")
+    import cv2
+    from estimators import HitnetEstimator
+    model_path = stage1_dir / "models" / "hitnet.onnx"
+    assert model_path.exists(), f"Model file missing at {model_path}"
+
+    l_path = stage1_dir / "test_data" / "cones" / "im2.png"
+    r_path = stage1_dir / "test_data" / "cones" / "im6.png"
+    left = cv2.imread(str(l_path))
+    right = cv2.imread(str(r_path))
+
+    estimator = HitnetEstimator(model_path=model_path)
+    estimator.initialize()
+    print(f"✓ Initialized estimator: {estimator.name}")
+
+    disparity = estimator.estimate_disparity(left, right)
+    assert disparity.shape == left.shape[:2]
+    assert disparity.dtype == np.float32
+
+    compactness = calculate_compactness(disparity)
+    print(f"✓ HITNet Compactness: {compactness:.1f}%")
+    print(f"✓ HITNet disparity computed successfully.")
+
+
 if __name__ == "__main__":
     print("==================================================")
     print("       STAGE 1 STEREO VISION TEST SUITE           ")
@@ -152,6 +177,7 @@ if __name__ == "__main__":
     test_traditional_sgbm()
     test_depth_conversion_and_legend()
     test_deep_crestereo()
+    test_hitnet()
     print("\n==================================================")
     print("       ALL STAGE 1 TESTS PASSED SUCCESSFULLY!     ")
     print("==================================================")

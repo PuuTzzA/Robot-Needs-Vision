@@ -49,7 +49,11 @@ class HitnetEstimator(BaseStereoEstimator):
 
     @property
     def name(self) -> str:
-        prov = "CUDA" if "CUDA" in self._active_provider else "CPU"
+        if self._active_provider == "Uninitialized":
+            has_cuda = self._use_cuda and ort is not None and "CUDAExecutionProvider" in ort.get_available_providers()
+            prov = "CUDA" if has_cuda else "CPU"
+        else:
+            prov = "CUDA" if "CUDA" in self._active_provider else "CPU"
         return f"HITNet ({prov}/ONNX)"
 
     def _resolve_model_path(self) -> Path:
