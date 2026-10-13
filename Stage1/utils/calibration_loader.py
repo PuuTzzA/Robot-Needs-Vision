@@ -119,6 +119,69 @@ class StereoCalibration:
             f"Rectified fx: {self.focal_length_px:.1f} px | "
             f"Resolution: {self.target_width}x{self.target_height}"
         )
+        self._cached_maps: dict[tuple[int, int], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]] = {
+            (self.target_width, self.target_height): (
+                self.map_left_x,
+                self.map_left_y,
+                self.map_right_x,
+                self.map_right_y,
+                self.focal_length_px,
+            )
+        }
+
+    def get_maps_for_size(
+        self, width: int, height: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+        """Compute and cache rectification maps for any incoming stream resolution."""
+        if (width, height) in self._cached_maps:
+            return self._cached_maps[(width, height)]
+
+        calib_w, calib_h = 1920, 1080
+        sx = width / calib_w
+        sy = height / calib_h
+
+        k1_scaled = self.K1.copy()
+        k1_scaled[0, 0] *= sx
+        k1_scaled[0, 2] *= sx
+        k1_scaled[1, 1] *= sy
+        k1_scaled[1, 2] *= sy
+
+        k2_scaled = self.K2.copy()
+        k2_scaled[0, 0] *= sx
+        k2_scaled[0, 2] *= sx
+        k2_scaled[1, 1] *= sy
+        k2_scaled[1, 2] *= sy
+
+        image_size = (width, height)
+        R1, R2, P1, P2, _, _, _ = cv2.stereoRectify(
+            k1_scaled,
+            self.D1,
+            k2_scaled,
+            self.D2,
+            image_size,
+            self.R,
+            self.T,
+            flags=cv2.CALIB_ZERO_DISPARITY,
+            alpha=0,
+            newImageSize=image_size,
+        )
+
+        map_l_x, map_l_y = cv2.initUndistortRectifyMap(
+            k1_scaled, self.D1, R1, P1, image_size, cv2.CV_32FC1
+        )
+        map_r_x, map_r_y = cv2.initUndistortRectifyMap(
+            k2_scaled, self.D2, R2, P2, image_size, cv2.CV_32FC1
+        )
+        focal_px = float(P1[0, 0])
+        self._cached_maps[(width, height)] = (map_l_x, map_l_y, map_r_x, map_r_y, focal_px)
+        return self._cached_maps[(width, height)]
+
+    def get_focal_length(self, width: int | None = None, height: int | None = None) -> float:
+        """Return the rectified focal length in pixels for the given frame dimensions."""
+        if width is None or height is None or (width == self.target_width and height == self.target_height):
+            return self.focal_length_px
+        _, _, _, _, focal_px = self.get_maps_for_size(width, height)
+        return focal_px
 
     def rectify_pair(
         self,
@@ -126,11 +189,14 @@ class StereoCalibration:
         right_raw: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Apply undistortion and epipolar rectification maps to left and right frames."""
-        left_rect = cv2.remap(
-            left_raw, self.map_left_x, self.map_left_y, cv2.INTER_LINEAR
-        )
-        right_rect = cv2.remap(
-            right_raw, self.map_right_x, self.map_right_y, cv2.INTER_LINEAR
-        )
+        h, w = left_raw.shape[:2]
+        if w == self.target_width and h == self.target_height:
+            map_lx, map_ly = self.map_left_x, self.map_left_y
+            map_rx, map_ry = self.map_right_x, self.map_right_y
+        else:
+            map_lx, map_ly, map_rx, map_ry, _ = self.get_maps_for_size(w, h)
+
+        left_rect = cv2.remap(left_raw, map_lx, map_ly, cv2.INTER_LINEAR)
+        right_rect = cv2.remap(right_raw, map_rx, map_ry, cv2.INTER_LINEAR)
         return left_rect, right_rect
 

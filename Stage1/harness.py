@@ -73,8 +73,17 @@ class StereoPipeline:
         self.latest_composite_jpeg: bytes | None = None
         self.preview_dims: tuple[int, int] = (1440, 360)  # total width, height
 
-        # Metrics
+        # Metrics & Latency breakdown
         self.fps: float = 0.0
+        self.total_ms: float = 0.0
+        self.t_rectify_ms: float = 0.0
+        self.t_infer_ms: float = 0.0
+        self.t_depth_ms: float = 0.0
+        self.t_vis_ms: float = 0.0
+        self.t_net_recv_ms: float = 0.0
+        self.sender_fps: float = 0.0
+        self.swap_cameras: bool = False
+
         self.compactness_pct: float = 0.0
         self.target_x: int = 960
         self.target_y: int = 540
@@ -83,9 +92,25 @@ class StereoPipeline:
         self.target_valid_ratio: float = 0.0
         self._incoming_network_pair: tuple[np.ndarray, np.ndarray] | None = None
 
-    def enqueue_network_pair(self, left: np.ndarray, right: np.ndarray) -> None:
+    def enqueue_network_pair(
+        self,
+        left: np.ndarray,
+        right: np.ndarray,
+        recv_ms: float = 0.0,
+        sender_fps: float = 0.0,
+    ) -> None:
         with self.lock:
             self._incoming_network_pair = (left, right)
+            if recv_ms > 0:
+                self.t_net_recv_ms = recv_ms
+            if sender_fps > 0:
+                self.sender_fps = sender_fps
+
+    def toggle_swap_cameras(self) -> bool:
+        with self.lock:
+            self.swap_cameras = not self.swap_cameras
+            print(f"[Pipeline] Swap cameras set to: {self.swap_cameras}")
+            return self.swap_cameras
 
     def switch_estimator(self, name: str) -> bool:
         with self.lock:
@@ -152,45 +177,55 @@ class StereoPipeline:
     def process_pair(self, left_raw: np.ndarray, right_raw: np.ndarray) -> None:
         start_t = time.perf_counter()
 
-        # Adapt to scaled network streams (e.g. 960x540) to match calibration maps
-        target_w, target_h = self.calib.target_width, self.calib.target_height
-        if left_raw.shape[1] != target_w or left_raw.shape[0] != target_h:
-            left_raw = cv2.resize(left_raw, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-            right_raw = cv2.resize(right_raw, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        # Handle camera swap if toggled
+        if self.swap_cameras:
+            left_raw, right_raw = right_raw, left_raw
 
-        # 1. Epipolar rectification
+        # 1. Epipolar rectification (native resolution via cached calibration maps)
+        t0 = time.perf_counter()
         left_rect, right_rect = self.calib.rectify_pair(left_raw, right_raw)
+        t_rectify_ms = (time.perf_counter() - t0) * 1000.0
 
         # 2. Run active stereo depth estimator
+        t1 = time.perf_counter()
         disparity = self.active_estimator.estimate_disparity(left_rect, right_rect)
+        t_infer_ms = (time.perf_counter() - t1) * 1000.0
 
-        # 3. Compute absolute metric depth
+        # 3. Compute absolute metric depth Z = (fx * B) / d
+        t2 = time.perf_counter()
+        focal_px = self.calib.get_focal_length(left_rect.shape[1], left_rect.shape[0])
         depth_m = disparity_to_depth(
             disparity=disparity,
-            focal_length_px=self.calib.focal_length_px,
+            focal_length_px=focal_px,
             baseline_m=self.calib.baseline_m,
             min_depth=self.min_depth,
             max_depth=self.max_depth,
         )
 
-        # 4. Compute metrics
-        elapsed = time.perf_counter() - start_t
-        fps = 1.0 / max(1e-5, elapsed)
-        compactness = calculate_compactness(depth_m)
+        # 4. Compute metrics (calculate compactness within active evaluated FOV)
+        crop_bounds = getattr(self.active_estimator, "active_crop_bounds", None)
+        if crop_bounds is not None:
+            compactness = calculate_compactness(
+                depth_m, crop_x_offset=crop_bounds[0], crop_w=crop_bounds[1]
+            )
+        else:
+            compactness = calculate_compactness(depth_m)
 
         # Sample target ROI depth
         orig_h, orig_w = depth_m.shape[:2]
         tx = max(0, min(orig_w - 1, self.target_x))
         ty = max(0, min(orig_h - 1, self.target_y))
         med_z, std_z, valid_ratio = sample_roi_depth(depth_m, tx, ty, box_radius=15)
+        t_depth_ms = (time.perf_counter() - t2) * 1000.0
 
         # 5. Visualizations
+        t3 = time.perf_counter()
         target_panel_w, target_panel_h = 480, 270
-        left_vis = cv2.resize(left_rect, (target_panel_w, target_panel_h))
+        left_vis = cv2.resize(left_rect, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
         disp_colored = colorize_disparity(disparity)
-        disp_vis = cv2.resize(disp_colored, (target_panel_w, target_panel_h))
+        disp_vis = cv2.resize(disp_colored, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
         depth_colored = colorize_depth(depth_m, self.min_depth, self.max_depth)
-        depth_vis = cv2.resize(depth_colored, (target_panel_w, target_panel_h))
+        depth_vis = cv2.resize(depth_colored, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
 
         # Draw target reticle on Left View and Depth View
         scale_x = target_panel_w / float(orig_w)
@@ -220,34 +255,36 @@ class StereoPipeline:
         # Assemble side-by-side composite: [Left | Disparity | Depth + Legend]
         composite = np.hstack((left_vis, disp_vis, depth_with_legend))
 
-        # Add top banner text
+        # Add clean, non-overlapping translucent dark HUD banner across the top
+        h_bar = 24
+        banner_overlay = composite[0:h_bar, :].copy()
+        cv2.rectangle(composite, (0, 0), (composite.shape[1], h_bar), (15, 23, 42), -1)
+        cv2.addWeighted(composite[0:h_bar, :], 0.82, banner_overlay, 0.18, 0, composite[0:h_bar, :])
+
+        t_elapsed = time.perf_counter() - start_t
+        t_total_ms = t_elapsed * 1000.0
+        fps = 1.0 / max(1e-4, t_elapsed)
+
+        swap_tag = " [SWAPPED]" if self.swap_cameras else ""
         banner_text = (
-            f"{self.active_estimator.name} | {fps:.1f} FPS ({elapsed * 1000:.0f} ms) | "
+            f"{self.active_estimator.name}{swap_tag} | {fps:.1f} FPS ({t_total_ms:.0f} ms) | "
             f"Compactness: {compactness:.1f}% | Target: {med_z:.2f}m"
         )
+        # Single crisp white text render with dark pill backing
         cv2.putText(
             composite,
             banner_text,
-            (14, 22),
+            (12, 17),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
+            0.46,
             (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            composite,
-            banner_text,
-            (14, 22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 255, 255),
             1,
             cv2.LINE_AA,
         )
 
         _, jpeg_buf = cv2.imencode(".jpg", composite, [cv2.IMWRITE_JPEG_QUALITY, 80])
         jpeg_bytes = jpeg_buf.tobytes()
+        t_vis_ms = (time.perf_counter() - t3) * 1000.0
 
         # Update shared state
         with self.lock:
@@ -257,6 +294,11 @@ class StereoPipeline:
             self.latest_composite_jpeg = jpeg_bytes
             self.preview_dims = (composite.shape[1], composite.shape[0])
             self.fps = fps
+            self.total_ms = t_total_ms
+            self.t_rectify_ms = t_rectify_ms
+            self.t_infer_ms = t_infer_ms
+            self.t_depth_ms = t_depth_ms
+            self.t_vis_ms = t_vis_ms
             self.compactness_pct = compactness
             self.target_depth_m = med_z
             self.target_std_m = std_z
@@ -323,6 +365,14 @@ class WebServerHandler(BaseHTTPRequestHandler):
             with self.pipeline.lock:
                 data = {
                     "fps": self.pipeline.fps,
+                    "total_ms": self.pipeline.total_ms,
+                    "rectify_ms": self.pipeline.t_rectify_ms,
+                    "infer_ms": self.pipeline.t_infer_ms,
+                    "depth_ms": self.pipeline.t_depth_ms,
+                    "vis_ms": self.pipeline.t_vis_ms,
+                    "net_recv_ms": self.pipeline.t_net_recv_ms,
+                    "sender_fps": self.pipeline.sender_fps,
+                    "swap_cameras": self.pipeline.swap_cameras,
                     "estimator": self.pipeline.active_estimator.name,
                     "compactness": self.pipeline.compactness_pct,
                     "target_depth": self.pipeline.target_depth_m,
@@ -344,6 +394,10 @@ class WebServerHandler(BaseHTTPRequestHandler):
             ok = self.pipeline.switch_estimator(name)
             self._send_json({"success": ok, "estimator": name})
 
+        elif path == "/api/swap_cameras":
+            swapped = self.pipeline.toggle_swap_cameras()
+            self._send_json({"success": True, "swap_cameras": swapped})
+
         elif path == "/api/set_target":
             query = parse_qs(parsed.query)
             x = int(query.get("x", [960])[0])
@@ -352,7 +406,14 @@ class WebServerHandler(BaseHTTPRequestHandler):
             self._send_json({"success": True, "target_x": x, "target_y": y})
 
         elif path == "/api/push_frame":
+            t_recv_start = time.perf_counter()
             content_length = int(self.headers.get("Content-Length", 0))
+            sender_fps_header = self.headers.get("X-Sender-FPS", "0.0")
+            try:
+                sender_fps = float(sender_fps_header)
+            except ValueError:
+                sender_fps = 0.0
+
             if content_length > 0:
                 payload = self.rfile.read(content_length)
                 np_arr = np.frombuffer(payload, dtype=np.uint8)
@@ -362,7 +423,10 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     mid_x = w // 2
                     left_frame = composite[:, :mid_x]
                     right_frame = composite[:, mid_x:]
-                    self.pipeline.enqueue_network_pair(left_frame, right_frame)
+                    t_recv_ms = (time.perf_counter() - t_recv_start) * 1000.0
+                    self.pipeline.enqueue_network_pair(
+                        left_frame, right_frame, recv_ms=t_recv_ms, sender_fps=sender_fps
+                    )
             self._send_json({"success": True})
         else:
             self.send_error(HTTPStatus.NOT_FOUND)

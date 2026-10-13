@@ -165,16 +165,37 @@ def attach_depth_legend(
     return np.hstack((depth_vis, legend_bar))
 
 
-def calculate_compactness(depth_or_disparity: np.ndarray) -> float:
+def calculate_compactness(
+    depth_or_disparity: np.ndarray,
+    crop_x_offset: int | None = None,
+    crop_w: int | None = None,
+) -> float:
     """Compute the compactness (fill rate / density percentage) of valid depth pixels.
 
     Formula: (valid_pixels / total_pixels) * 100.0
+    If crop_x_offset and crop_w are provided, compactness is computed strictly
+    over the evaluated sub-region. If not provided and pillarbox margin bars exist,
+    it computes over the active horizontal FOV where disparity was estimated.
     """
-    total = depth_or_disparity.size
+    if depth_or_disparity.size == 0:
+        return 0.0
+
+    if crop_x_offset is not None and crop_w is not None and crop_w > 0:
+        region = depth_or_disparity[:, crop_x_offset : crop_x_offset + crop_w]
+    else:
+        # Auto-detect active horizontal evaluation range if left/right are all invalid
+        valid_cols = np.where(np.any(np.isfinite(depth_or_disparity) & (depth_or_disparity > 0), axis=0))[0]
+        if len(valid_cols) == 0:
+            return 0.0
+        c_min, c_max = valid_cols[0], valid_cols[-1] + 1
+        region = depth_or_disparity[:, c_min:c_max]
+
+    total = region.size
     if total == 0:
         return 0.0
-    valid = np.count_nonzero(np.isfinite(depth_or_disparity) & (depth_or_disparity > 0))
+    valid = np.count_nonzero(np.isfinite(region) & (region > 0))
     return float(valid / total) * 100.0
+
 
 
 def sample_roi_depth(

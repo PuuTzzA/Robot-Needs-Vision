@@ -18,15 +18,16 @@ class TraditionalSGBMEstimator(BaseStereoEstimator):
     def __init__(
         self,
         min_disparity: int = 0,
-        num_disparities: int = 16 * 8,  # Must be divisible by 16
+        num_disparities: int = 16 * 10,  # 160 px search range covers close indoor objects down to ~0.7m
         block_size: int = 5,
-        uniqueness_ratio: int = 10,
-        speckle_window_size: int = 100,
-        speckle_range: int = 32,
+        uniqueness_ratio: int = 5,  # Slightly lower ratio prevents excessive void rejection on low-texture walls
+        speckle_window_size: int = 50,
+        speckle_range: int = 16,
         disp_12_max_diff: int = 1,
         use_wls_filter: bool = True,
         wls_lambda: float = 8000.0,
         wls_sigma: float = 1.5,
+        swap_cameras: bool = False,
     ) -> None:
         self._min_disp = min_disparity
         self._num_disp = num_disparities
@@ -38,6 +39,7 @@ class TraditionalSGBMEstimator(BaseStereoEstimator):
         self._use_wls = use_wls_filter
         self._wls_lambda = wls_lambda
         self._wls_sigma = wls_sigma
+        self.swap_cameras = swap_cameras
 
         self._matcher_left: cv2.StereoSGBM | None = None
         self._matcher_right: cv2.StereoMatcher | None = None
@@ -96,6 +98,9 @@ class TraditionalSGBMEstimator(BaseStereoEstimator):
             if right_rectified.ndim == 3
             else right_rectified
         )
+
+        if self.swap_cameras:
+            gray_left, gray_right = gray_right, gray_left
 
         if self._has_ximgproc and self._matcher_right is not None and self._wls_filter is not None:
             disp_l = self._matcher_left.compute(gray_left, gray_right)

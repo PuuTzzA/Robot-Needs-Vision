@@ -181,6 +181,7 @@ def stream_http(args: argparse.Namespace, grabber: CameraGrabber) -> None:
 
             frame_count = 0
             fps_timer = time.perf_counter()
+            current_stream_fps = 0.0
 
             while True:
                 loop_start = time.perf_counter()
@@ -199,24 +200,28 @@ def stream_http(args: argparse.Namespace, grabber: CameraGrabber) -> None:
                     ch, cw = composite.shape[:2]
                     target_w = int(cw * scale)
                     target_h = int(ch * scale)
-                    composite = cv2.resize(composite, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                    composite = cv2.resize(composite, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
                 success, encoded_jpg = cv2.imencode(".jpg", composite, encode_param)
                 if not success:
                     continue
 
                 payload = encoded_jpg.tobytes()
-                conn.request("POST", "/api/push_frame", body=payload, headers=headers)
+                req_headers = dict(headers)
+                req_headers["X-Capture-Timestamp"] = f"{time.time():.4f}"
+                req_headers["X-Sender-FPS"] = f"{current_stream_fps:.1f}"
+
+                conn.request("POST", "/api/push_frame", body=payload, headers=req_headers)
                 res = conn.getresponse()
                 res.read()  # read response body to keep connection reusable
 
                 frame_count += 1
                 now = time.perf_counter()
                 if now - fps_timer >= 1.0:
-                    stream_fps = frame_count / (now - fps_timer)
+                    current_stream_fps = frame_count / (now - fps_timer)
                     kb_per_frame = len(payload) / 1024.0
                     sys.stdout.write(
-                        f"\r[HTTP Streaming] {stream_fps:.1f} FPS | Frame size: {kb_per_frame:.1f} KB | Rate: {stream_fps * kb_per_frame / 1024.0:.2f} MB/s"
+                        f"\r[HTTP Streaming] {current_stream_fps:.1f} FPS | Frame size: {kb_per_frame:.1f} KB | Rate: {current_stream_fps * kb_per_frame / 1024.0:.2f} MB/s"
                     )
                     sys.stdout.flush()
                     frame_count = 0

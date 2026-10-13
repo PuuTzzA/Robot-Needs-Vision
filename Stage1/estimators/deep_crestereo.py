@@ -8,7 +8,11 @@ from pathlib import Path
 import sys
 import cv2
 import numpy as np
-import onnxruntime as ort
+
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None
 
 from .base import BaseStereoEstimator
 
@@ -64,6 +68,8 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
         return "Deep CREStereo (CUDA/ONNX)"
 
     def initialize(self) -> None:
+        if ort is None:
+            raise ImportError("onnxruntime is not installed in this environment.")
         if not self._model_path.exists():
             raise FileNotFoundError(f"CREStereo model not found at {self._model_path}")
 
@@ -102,8 +108,24 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
             w = int(inp.shape[3])
             self._input_shapes.append((h, w))
 
+        # Warm-up inference to trigger CUDA kernel compilation and avoid cold-start lag
+        try:
+            dummy_feed = {
+                name: np.zeros((1, 3, h, w), dtype=np.float32)
+                for name, (h, w) in zip(self._input_names, self._input_shapes)
+            }
+            self._session.run(None, dummy_feed)
+            print("[CREStereo] Model warm-up inference succeeded.")
+        except Exception as e:
+            print(f"[CREStereo] Model warm-up notice: {e}")
+
+    @property
+    def active_crop_bounds(self) -> tuple[int, int] | None:
+        """Returns (crop_x_offset, crop_w) for compactness calculation if cropped, else None."""
+        return getattr(self, "_last_crop_bounds", None)
+
     def _prepare_tensor(self, img_bgr: np.ndarray, height: int, width: int) -> np.ndarray:
-        resized = cv2.resize(img_bgr, (width, height), interpolation=cv2.INTER_AREA)
+        resized = cv2.resize(img_bgr, (width, height), interpolation=cv2.INTER_LINEAR)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         tensor = rgb.transpose(2, 0, 1)[None]  # (1, 3, H, W)
         return (tensor.astype(np.float32) / 255.0).copy()
@@ -128,9 +150,11 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
             left_in, x_offset = self._center_crop_4_3(left_rectified)
             right_in = right_rectified[:, x_offset : x_offset + left_in.shape[1]]
             self._crop_x_offset = x_offset
+            self._last_crop_bounds = (x_offset, left_in.shape[1])
         else:
             left_in, right_in = left_rectified, right_rectified
             self._crop_x_offset = 0
+            self._last_crop_bounds = (0, orig_w)
 
         crop_h, crop_w = left_in.shape[:2]
 
