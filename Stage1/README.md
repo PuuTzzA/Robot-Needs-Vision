@@ -55,57 +55,47 @@ pip install opencv-python numpy
 
 ---
 
-## Method 1: Running with VS Code Remote Explorer (Easiest)
+## Quickstart Guide: Running the Pipeline (Single Port 8080)
 
-If you are using **VS Code Remote SSH**:
+Because VS Code automatically forwards port **8080**, the camera sender now streams directly over **port 8080** via HTTP. **You do NOT need to configure or forward port 5555 anymore!**
 
-### Step 1: Forward the Ports in VS Code
-1. In VS Code, look at the bottom panel and click on the **Ports** tab (next to Terminal / Output).
-2. Ensure the following two ports are forwarded:
-   - **Port `8080` (Local -> Remote)**: For the interactive web dashboard. (VS Code usually auto-forwards this).
-   - **Port `5555` (Reverse: Remote -> Local)**: For the camera stream.
-     - In the Ports tab, click **Add Port** -> enter `5555`.
-     - Right-click the forwarded port `5555` -> select **Port Forwarding Type** -> **Reverse** (forward from remote server to your local machine).
-
-*(Alternatively, if you prefer terminal SSH, see **Method 2** below).*
-
-### Step 2: Start the Master Pipeline on the Remote Server
+### Step 1: Start the Master Pipeline on the Remote Server (SSH)
 In your remote terminal inside VS Code:
 ```bash
 cd /data/thomas/Robot-Needs-Vision
-.venv/bin/python Stage1/harness.py --source network --web-port 8080 --stream-port 5555
+.venv/bin/python Stage1/harness.py --source network --web-port 8080
 ```
 You will see:
 ```text
-======================================================================
-  STAGE 1 STEREO VISION HARNESS
-  Source: NETWORK | Initial Estimator: CRESTEREO
-======================================================================
 [Calibration] Loaded successfully. Baseline: 59.79 mm | Rectified fx: 3803.9 px
 [Pipeline] Initializing active estimator: Deep CREStereo (CUDA/ONNX)...
 [WebUI] Interactive dashboard running at http://0.0.0.0:8080
-[NetworkReceiver] Listening for laptop camera stream on 0.0.0.0:5555...
+[Source] Waiting for frames from laptop...
 ```
 
-### Step 3: Stream Your Cameras from Your Laptop
-Open a terminal on your **local laptop** (not in SSH), navigate to the project directory, and run:
-```bash
-# If on macOS / Linux laptop:
-python3 Stage1/laptop_camera_sender.py --server 127.0.0.1 --port 5555 --left-cam 0 --right-cam 1
+### Step 2: Stream Your Cameras from Your Laptop
+Open a PowerShell or Command Prompt terminal on your **local laptop** (inside `Robot-Needs-Vision\Stage1`):
+```powershell
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2
+```
+*(On Windows, `0` and `2` are typical for external stereo USB webcams. If your cameras use indices 1 and 2, use `--left-cam 1 --right-cam 2`).*
 
-# If on Windows laptop:
-python Stage1/laptop_camera_sender.py --server 127.0.0.1 --port 5555 --left-cam 0 --right-cam 1
+You will see:
+```text
+[LaptopSender] Connecting via HTTP to http://127.0.0.1:8080/api/push_frame...
+[LaptopSender] Connected! Streaming stereo frames directly via HTTP port 8080...
+[HTTP Streaming] 15.0 FPS | Frame size: 280.4 KB | Rate: 4.12 MB/s
 ```
 
-> [!TIP]
-> **Which Camera Index?**
-> - On Mac / Linux: usually `--left-cam 0 --right-cam 1` (or `1` and `2` if your laptop has a built-in FaceTime/webcam).
-> - On Windows: usually `--left-cam 1 --right-cam 2` (device `0` is often the built-in webcam).
-> - If the left and right feeds look swapped in the browser, simply swap the indices: `--left-cam 1 --right-cam 0`.
-
-### Step 4: Open the Dashboard in Your Browser
-Open your browser on your laptop:
+### Step 3: Open the Dashboard in Your Browser
+On your laptop, open:
 👉 **`http://localhost:8080`**
+
+You will see the three panels live:
+1. **[1] Rectified Left Feed**
+2. **[2] Disparity Map**
+3. **[3] Absolute Depth Map & Metric Legend**
+Hover your mouse over the depth view to see instant millimeter/centimeter depth readouts!
 
 ---
 

@@ -81,6 +81,11 @@ class StereoPipeline:
         self.target_depth_m: float = float("nan")
         self.target_std_m: float = float("nan")
         self.target_valid_ratio: float = 0.0
+        self._incoming_network_pair: tuple[np.ndarray, np.ndarray] | None = None
+
+    def enqueue_network_pair(self, left: np.ndarray, right: np.ndarray) -> None:
+        with self.lock:
+            self._incoming_network_pair = (left, right)
 
     def switch_estimator(self, name: str) -> bool:
         with self.lock:
@@ -339,6 +344,20 @@ class WebServerHandler(BaseHTTPRequestHandler):
             y = int(query.get("y", [540])[0])
             self.pipeline.set_target_roi(x, y)
             self._send_json({"success": True, "target_x": x, "target_y": y})
+
+        elif path == "/api/push_frame":
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > 0:
+                payload = self.rfile.read(content_length)
+                np_arr = np.frombuffer(payload, dtype=np.uint8)
+                composite = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if composite is not None:
+                    h, w = composite.shape[:2]
+                    mid_x = w // 2
+                    left_frame = composite[:, :mid_x]
+                    right_frame = composite[:, mid_x:]
+                    self.pipeline.enqueue_network_pair(left_frame, right_frame)
+            self._send_json({"success": True})
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -475,10 +494,16 @@ def main() -> None:
             left_frame: np.ndarray | None = None
             right_frame: np.ndarray | None = None
 
-            if args.source == "network" and receiver is not None:
-                pair = receiver.get_latest_pair()
+            if args.source == "network":
+                pair = None
+                with pipeline.lock:
+                    if pipeline._incoming_network_pair is not None:
+                        pair = pipeline._incoming_network_pair
+                        pipeline._incoming_network_pair = None
+                if pair is None and receiver is not None:
+                    pair = receiver.get_latest_pair()
                 if pair is None:
-                    time.sleep(0.01)
+                    time.sleep(0.005)
                     continue
                 left_frame, right_frame = pair
             elif args.source == "mock":
