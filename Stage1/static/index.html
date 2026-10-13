@@ -254,6 +254,7 @@
     <div class="controls">
       <span style="font-size: 0.85rem; color: var(--text-muted); margin-right: 4px;">Estimator:</span>
       <button id="btn-crestereo" class="btn active" onclick="switchEstimator('crestereo')">CREStereo (Deep DL)</button>
+      <button id="btn-hitnet" class="btn" onclick="switchEstimator('hitnet')">HITNet (Fast DL)</button>
       <button id="btn-sgbm" class="btn" onclick="switchEstimator('sgbm')">StereoSGBM (Traditional)</button>
       <button id="btn-swap-cam" class="btn" onclick="toggleSwapCameras()">🔄 Swap Cameras (L ↔ R)</button>
     </div>
@@ -399,13 +400,10 @@
     });
 
     async function switchEstimator(name) {
-      document.getElementById('btn-crestereo').classList.remove('active');
-      document.getElementById('btn-sgbm').classList.remove('active');
-      if (name === 'crestereo') {
-        document.getElementById('btn-crestereo').classList.add('active');
-      } else {
-        document.getElementById('btn-sgbm').classList.add('active');
-      }
+      ['crestereo', 'hitnet', 'sgbm'].forEach(id => {
+        const btn = document.getElementById(`btn-${id}`);
+        if (btn) btn.classList.toggle('active', id === name);
+      });
 
       await fetch(`/api/switch_estimator?name=${name}`, { method: 'POST' });
       currentEstimator = name;
@@ -465,8 +463,15 @@
 
         const totalMs = data.total_ms || (1000.0 / Math.max(0.1, data.fps));
         document.getElementById('metric-fps').innerText = `${data.fps.toFixed(1)} FPS`;
-        document.getElementById('metric-latency-badge').innerText = `${totalMs.toFixed(1)} ms/frame`;
-        document.getElementById('metric-latency').innerText = `Total: ${totalMs.toFixed(1)} ms | ${data.estimator}`;
+        const gpuInfo = (data.gpus && data.gpus.length > 1) ? ` [${data.gpus.length} GPUs: ${data.gpus.join(',')}]` : '';
+        document.getElementById('metric-latency').innerText = `Total: ${totalMs.toFixed(1)} ms | ${data.estimator}${gpuInfo}`;
+
+        if (data.estimator_key) {
+          ['crestereo', 'hitnet', 'sgbm'].forEach(id => {
+            const btn = document.getElementById(`btn-${id}`);
+            if (btn) btn.classList.toggle('active', id === data.estimator_key);
+          });
+        }
 
         // Latency breakdown items
         document.getElementById('bd-infer').innerText = `${(data.infer_ms || 0).toFixed(1)} ms`;

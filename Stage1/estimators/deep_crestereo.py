@@ -54,10 +54,12 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
         model_path: str | Path = "models/crestereo_embedded.onnx",
         crop_to_4_3: bool = True,
         use_cuda: bool = True,
+        device_id: int = 0,
     ) -> None:
         self._model_path = Path(model_path)
         self._crop_to_4_3 = crop_to_4_3
         self._use_cuda = use_cuda
+        self._device_id = device_id
         self._session: ort.InferenceSession | None = None
         self._input_names: list[str] = []
         self._input_shapes: list[tuple[int, int]] = []
@@ -76,6 +78,8 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         session_options.log_severity_level = 3  # Suppress non-critical memcpy warnings
+        session_options.intra_op_num_threads = 8
+        session_options.inter_op_num_threads = 2
 
         available_providers = ort.get_available_providers()
         providers = []
@@ -84,7 +88,7 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
                 (
                     "CUDAExecutionProvider",
                     {
-                        "device_id": 0,
+                        "device_id": self._device_id,
                         "arena_extend_strategy": "kNextPowerOfTwo",
                         "gpu_mem_limit": 4 * 1024 * 1024 * 1024,  # 4 GB
                         "cudnn_conv_algo_search": "HEURISTIC",

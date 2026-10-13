@@ -4,7 +4,8 @@
 Features:
 - Camera input: Network pipe (laptop stream), Mock stereo pair, or Local webcams.
 - Calibration & Epipolar Rectification: Loads stereo_calibration_fixed.yml and rectifies scanlines.
-- Modular Depth Estimators: Dynamically toggles between CREStereo (Deep DL) and StereoSGBM (Traditional).
+- Modular Depth Estimators: Dynamically toggles between CREStereo (Deep DL), HITNet (Fast DL), and StereoSGBM (Traditional).
+- Multi-GPU Pipelining: Distributes frames across multiple GPUs via --gpus to eliminate sequential waiting.
 - Absolute Depth & Metric Legend: Metric depth calculation Z = (fx * B) / d, colormap with labeled legend.
 - Interactive Web Dashboard & Streamer: Accessible on http://localhost:8080 (auto-forwarded via VS Code).
 - Cursor Depth Inspection: Real-time metric depth lookup at mouse hover.
@@ -17,6 +18,8 @@ import argparse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import multiprocessing as mp
+import os
 from pathlib import Path
 import threading
 import time
@@ -25,7 +28,12 @@ from urllib.parse import parse_qs, urlparse
 import cv2
 import numpy as np
 
-from estimators import BaseStereoEstimator, DeepCREStereoEstimator, TraditionalSGBMEstimator
+from estimators import (
+    BaseStereoEstimator,
+    DeepCREStereoEstimator,
+    HitnetEstimator,
+    TraditionalSGBMEstimator,
+)
 from utils import (
     NetworkStereoReceiver,
     StereoCalibration,
@@ -38,14 +46,223 @@ from utils import (
 )
 
 
+def parse_gpu_ids(val: str) -> list[int]:
+    """Parses GPU argument into a list of integer GPU IDs.
+
+    Examples:
+        '0' -> [0]
+        '0,1,2,3' -> [0, 1, 2, 3]
+        '4' -> [0, 1, 2, 3]
+        '2,3' -> [2, 3]
+    """
+    val = val.strip()
+    if "," in val:
+        return [int(x.strip()) for x in val.split(",") if x.strip()]
+    elif val.isdigit():
+        num = int(val)
+        return list(range(num)) if num > 1 else [num]
+    return [0]
+
+
+def _gpu_worker_entry(
+    gpu_id: int,
+    task_queue: mp.Queue,
+    result_queue: mp.Queue,
+    crestereo_path: str,
+    hitnet_path: str | None,
+    initial_estimator: str,
+) -> None:
+    """Independent worker process dedicated to a single GPU."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    from estimators.deep_crestereo import _setup_cuda_and_cudnn
+    _setup_cuda_and_cudnn()
+
+    estimators: dict[str, BaseStereoEstimator] = {
+        "crestereo": DeepCREStereoEstimator(model_path=crestereo_path, device_id=0),
+        "sgbm": TraditionalSGBMEstimator(),
+        "hitnet": HitnetEstimator(model_path=hitnet_path, device_id=0),
+    }
+
+    active_name = initial_estimator if initial_estimator in estimators else "crestereo"
+    active_est = estimators[active_name]
+    try:
+        active_est.initialize()
+    except Exception as e:
+        print(f"[Worker GPU {gpu_id}] Initializing {active_name} failed: {e}. Falling back to crestereo.")
+        active_name = "crestereo"
+        active_est = estimators["crestereo"]
+        try:
+            active_est.initialize()
+        except Exception:
+            pass
+
+    result_queue.put(("READY", gpu_id, active_name))
+
+    while True:
+        try:
+            msg = task_queue.get()
+        except (KeyboardInterrupt, BrokenPipeError, EOFError):
+            break
+        if msg is None:
+            break
+
+        cmd, payload = msg
+        if cmd == "INFER":
+            frame_id, left_rect, right_rect, t_rectify_ms, t_net_recv, sender_fps, submit_t = payload
+            t0 = time.perf_counter()
+            try:
+                disp = active_est.estimate_disparity(left_rect, right_rect)
+            except Exception as e:
+                print(f"[Worker GPU {gpu_id}] Inference error: {e}")
+                disp = np.full((left_rect.shape[0], left_rect.shape[1]), np.nan, dtype=np.float32)
+
+            infer_ms = (time.perf_counter() - t0) * 1000.0
+            crop_bounds = getattr(active_est, "active_crop_bounds", None)
+
+            result_queue.put((
+                "RESULT",
+                gpu_id,
+                (
+                    frame_id,
+                    disp,
+                    crop_bounds,
+                    t_rectify_ms,
+                    infer_ms,
+                    left_rect,
+                    right_rect,
+                    t_net_recv,
+                    sender_fps,
+                    submit_t,
+                ),
+            ))
+
+        elif cmd == "SWITCH":
+            new_name = payload
+            err_msg = None
+            if new_name in estimators:
+                try:
+                    estimators[new_name].initialize()
+                    active_est = estimators[new_name]
+                    active_name = new_name
+                except Exception as e:
+                    err_msg = str(e)
+            else:
+                err_msg = f"Unknown estimator: {new_name}"
+            result_queue.put(("SWITCH_DONE", gpu_id, (active_name, err_msg)))
+
+
+class MultiGPUWorkerPool:
+    """Manages worker processes distributed across multiple GPUs for parallel frame inference."""
+
+    def __init__(
+        self,
+        gpu_ids: list[int],
+        crestereo_path: str,
+        hitnet_path: str | None,
+        initial_estimator: str,
+    ) -> None:
+        self.gpu_ids = gpu_ids
+        self.ctx = mp.get_context("spawn")
+        self.task_queues: dict[int, mp.Queue] = {gid: self.ctx.Queue() for gid in gpu_ids}
+        self.result_queue: mp.Queue = self.ctx.Queue()
+        self.workers: list[mp.Process] = []
+        self.busy_gpus: dict[int, bool] = {gid: False for gid in gpu_ids}
+        self.lock = threading.Lock()
+        self.frame_counter = 0
+
+        print(f"[MultiGPU] Initializing worker pool across {len(gpu_ids)} GPUs: {gpu_ids}...")
+        for gid in gpu_ids:
+            p = self.ctx.Process(
+                target=_gpu_worker_entry,
+                args=(
+                    gid,
+                    self.task_queues[gid],
+                    self.result_queue,
+                    crestereo_path,
+                    hitnet_path,
+                    initial_estimator,
+                ),
+                daemon=True,
+            )
+            p.start()
+            self.workers.append(p)
+
+        ready_workers: set[int] = set()
+        while len(ready_workers) < len(gpu_ids):
+            msg, gid, _ = self.result_queue.get()
+            if msg == "READY":
+                ready_workers.add(gid)
+                print(f"[MultiGPU] Worker on GPU {gid} initialized ({len(ready_workers)}/{len(gpu_ids)})")
+
+    def submit(
+        self,
+        left_rect: np.ndarray,
+        right_rect: np.ndarray,
+        t_rectify_ms: float = 0.0,
+        t_net_recv_ms: float = 0.0,
+        sender_fps: float = 0.0,
+    ) -> bool:
+        """Dispatches a rectified stereo frame to an available GPU worker without blocking."""
+        with self.lock:
+            # Find an idle GPU worker
+            idle_gpus = [gid for gid in self.gpu_ids if not self.busy_gpus[gid]]
+            if idle_gpus:
+                chosen_gpu = idle_gpus[0]
+            else:
+                # All workers busy; queue up to 1 frame on round-robin worker
+                chosen_gpu = self.gpu_ids[self.frame_counter % len(self.gpu_ids)]
+                if self.task_queues[chosen_gpu].qsize() >= 1:
+                    # Drop stale frame to keep real-time latency minimal
+                    return False
+
+            self.busy_gpus[chosen_gpu] = True
+            self.frame_counter += 1
+            frame_id = self.frame_counter
+
+            self.task_queues[chosen_gpu].put((
+                "INFER",
+                (frame_id, left_rect, right_rect, t_rectify_ms, t_net_recv_ms, sender_fps, time.perf_counter()),
+            ))
+            return True
+
+    def mark_idle(self, gpu_id: int) -> None:
+        with self.lock:
+            self.busy_gpus[gpu_id] = False
+
+    def switch_estimator(self, name: str) -> bool:
+        with self.lock:
+            for gid in self.gpu_ids:
+                self.task_queues[gid].put(("SWITCH", name))
+
+            success = True
+            for _ in self.gpu_ids:
+                msg, gid, (act_name, err) = self.result_queue.get()
+                if err is not None:
+                    print(f"[MultiGPU] GPU {gid} failed to switch to {name}: {err}")
+                    success = False
+            return success
+
+    def shutdown(self) -> None:
+        for q in self.task_queues.values():
+            try:
+                q.put(None)
+            except Exception:
+                pass
+        for p in self.workers:
+            p.join(timeout=1.0)
+
+
 class StereoPipeline:
-    """Manages calibration, active estimator, inference loop, and shared metric state."""
+    """Manages calibration, active estimator, multi-GPU pool, inference loop, and shared metric state."""
 
     def __init__(
         self,
         calibration: StereoCalibration,
         initial_estimator_name: str = "crestereo",
         model_path: str = "models/crestereo_embedded.onnx",
+        hitnet_model_path: str | Path | None = None,
+        gpu_ids: list[int] | None = None,
         min_depth: float = 0.3,
         max_depth: float = 5.0,
     ) -> None:
@@ -53,18 +270,38 @@ class StereoPipeline:
         self.min_depth = min_depth
         self.max_depth = max_depth
         self.lock = threading.Lock()
+        self.gpu_ids = gpu_ids if gpu_ids is not None and len(gpu_ids) > 0 else [0]
+        self.is_multigpu = len(self.gpu_ids) > 1
 
-        # Initialize estimators
+        # Initialize estimators dictionary (3 estimators: CREStereo, SGBM, HITNet)
+        primary_gpu = self.gpu_ids[0]
         self.estimators: dict[str, BaseStereoEstimator] = {
-            "crestereo": DeepCREStereoEstimator(model_path=model_path),
+            "crestereo": DeepCREStereoEstimator(model_path=model_path, device_id=primary_gpu),
             "sgbm": TraditionalSGBMEstimator(),
+            "hitnet": HitnetEstimator(model_path=hitnet_model_path, device_id=primary_gpu),
         }
         self.active_estimator_name = (
             initial_estimator_name if initial_estimator_name in self.estimators else "crestereo"
         )
         self.active_estimator = self.estimators[self.active_estimator_name]
-        print(f"[Pipeline] Initializing active estimator: {self.active_estimator.name}...")
-        self.active_estimator.initialize()
+
+        # Multi-GPU worker pool or single-GPU local initialization
+        self.worker_pool: MultiGPUWorkerPool | None = None
+        self._running = True
+        self._collector_thread: threading.Thread | None = None
+
+        if self.is_multigpu:
+            self.worker_pool = MultiGPUWorkerPool(
+                gpu_ids=self.gpu_ids,
+                crestereo_path=str(model_path),
+                hitnet_path=str(hitnet_model_path) if hitnet_model_path else None,
+                initial_estimator=self.active_estimator_name,
+            )
+            self._collector_thread = threading.Thread(target=self._result_collector_loop, daemon=True)
+            self._collector_thread.start()
+        else:
+            print(f"[Pipeline] Initializing active estimator: {self.active_estimator.name} on GPU {primary_gpu}...")
+            self.active_estimator.initialize()
 
         # State buffers
         self.latest_left_rect: np.ndarray | None = None
@@ -83,6 +320,7 @@ class StereoPipeline:
         self.t_net_recv_ms: float = 0.0
         self.sender_fps: float = 0.0
         self.swap_cameras: bool = False
+        self._last_completed_t: float = 0.0
 
         self.compactness_pct: float = 0.0
         self.target_x: int = 960
@@ -91,6 +329,48 @@ class StereoPipeline:
         self.target_std_m: float = float("nan")
         self.target_valid_ratio: float = 0.0
         self._incoming_network_pair: tuple[np.ndarray, np.ndarray] | None = None
+
+    def _result_collector_loop(self) -> None:
+        """Continuously collects completed inference results from the multi-GPU pool."""
+        while self._running:
+            if self.worker_pool is None:
+                break
+            try:
+                msg = self.worker_pool.result_queue.get(timeout=0.1)
+            except Exception:
+                continue
+
+            if msg is None:
+                break
+
+            msg_type, gpu_id, payload = msg
+            if msg_type == "RESULT":
+                self.worker_pool.mark_idle(gpu_id)
+                (
+                    frame_id,
+                    disp,
+                    crop_bounds,
+                    t_rectify_ms,
+                    infer_ms,
+                    left_rect,
+                    right_rect,
+                    t_net_recv,
+                    sender_fps,
+                    submit_t,
+                ) = payload
+
+                self._finish_frame_pipeline(
+                    disparity=disp,
+                    crop_bounds=crop_bounds,
+                    left_rect=left_rect,
+                    right_rect=right_rect,
+                    t_rectify_ms=t_rectify_ms,
+                    t_infer_ms=infer_ms,
+                    t_net_recv_ms=t_net_recv,
+                    sender_fps=sender_fps,
+                    submit_t=submit_t,
+                    gpu_id=gpu_id,
+                )
 
     def enqueue_network_pair(
         self,
@@ -118,10 +398,21 @@ class StereoPipeline:
                 return False
             if name == self.active_estimator_name:
                 return True
+
             print(f"[Pipeline] Switching estimator to: {name}")
-            new_est = self.estimators[name]
-            new_est.initialize()
-            self.active_estimator = new_est
+            if self.is_multigpu and self.worker_pool is not None:
+                ok = self.worker_pool.switch_estimator(name)
+                if not ok:
+                    print(f"[Pipeline] Error switching multi-GPU workers to: {name}")
+                    return False
+            else:
+                try:
+                    self.estimators[name].initialize()
+                except Exception as e:
+                    print(f"[Pipeline] Error initializing estimator '{name}': {e}")
+                    return False
+
+            self.active_estimator = self.estimators[name]
             self.active_estimator_name = name
             return True
 
@@ -174,24 +465,73 @@ class StereoPipeline:
                 return True, float(np.median(valid_patch))
             return False, 0.0
 
-    def process_pair(self, left_raw: np.ndarray, right_raw: np.ndarray) -> None:
-        start_t = time.perf_counter()
+    def submit_pair(
+        self,
+        left_raw: np.ndarray,
+        right_raw: np.ndarray,
+        recv_ms: float = 0.0,
+        sender_fps: float = 0.0,
+    ) -> bool:
+        """Entry point for incoming stereo frames.
 
-        # Handle camera swap if toggled
+        In multi-GPU mode, rectifies scanlines and dispatches to an idle GPU worker without blocking.
+        In single-GPU mode, processes sequentially.
+        """
         if self.swap_cameras:
             left_raw, right_raw = right_raw, left_raw
 
-        # 1. Epipolar rectification (native resolution via cached calibration maps)
         t0 = time.perf_counter()
         left_rect, right_rect = self.calib.rectify_pair(left_raw, right_raw)
         t_rectify_ms = (time.perf_counter() - t0) * 1000.0
 
-        # 2. Run active stereo depth estimator
-        t1 = time.perf_counter()
-        disparity = self.active_estimator.estimate_disparity(left_rect, right_rect)
-        t_infer_ms = (time.perf_counter() - t1) * 1000.0
+        if self.is_multigpu and self.worker_pool is not None:
+            # Non-blocking dispatch across GPUs
+            return self.worker_pool.submit(
+                left_rect,
+                right_rect,
+                t_rectify_ms=t_rectify_ms,
+                t_net_recv_ms=recv_ms,
+                sender_fps=sender_fps,
+            )
+        else:
+            # Sequential single-GPU processing
+            t_submit = time.perf_counter()
+            t1 = time.perf_counter()
+            disparity = self.active_estimator.estimate_disparity(left_rect, right_rect)
+            t_infer_ms = (time.perf_counter() - t1) * 1000.0
+            crop_bounds = getattr(self.active_estimator, "active_crop_bounds", None)
+            self._finish_frame_pipeline(
+                disparity=disparity,
+                crop_bounds=crop_bounds,
+                left_rect=left_rect,
+                right_rect=right_rect,
+                t_rectify_ms=t_rectify_ms,
+                t_infer_ms=t_infer_ms,
+                t_net_recv_ms=recv_ms,
+                sender_fps=sender_fps,
+                submit_t=t_submit,
+                gpu_id=self.gpu_ids[0],
+            )
+            return True
 
-        # 3. Compute absolute metric depth Z = (fx * B) / d
+    def process_pair(self, left_raw: np.ndarray, right_raw: np.ndarray) -> None:
+        """Backwards-compatible synchronous frame processing method."""
+        self.submit_pair(left_raw, right_raw)
+
+    def _finish_frame_pipeline(
+        self,
+        disparity: np.ndarray,
+        crop_bounds: tuple[int, int] | None,
+        left_rect: np.ndarray,
+        right_rect: np.ndarray,
+        t_rectify_ms: float,
+        t_infer_ms: float,
+        t_net_recv_ms: float,
+        sender_fps: float,
+        submit_t: float,
+        gpu_id: int | None = None,
+    ) -> None:
+        """Executes metric depth conversion, reticle sampling, HUD rendering, and state update."""
         t2 = time.perf_counter()
         focal_px = self.calib.get_focal_length(left_rect.shape[1], left_rect.shape[0])
         depth_m = disparity_to_depth(
@@ -202,8 +542,7 @@ class StereoPipeline:
             max_depth=self.max_depth,
         )
 
-        # 4. Compute metrics (calculate compactness within active evaluated FOV)
-        crop_bounds = getattr(self.active_estimator, "active_crop_bounds", None)
+        # Compactness calculation
         if crop_bounds is not None:
             compactness = calculate_compactness(
                 depth_m, crop_x_offset=crop_bounds[0], crop_w=crop_bounds[1]
@@ -211,14 +550,17 @@ class StereoPipeline:
         else:
             compactness = calculate_compactness(depth_m)
 
-        # Sample target ROI depth
+        # Target ROI depth sampling
         orig_h, orig_w = depth_m.shape[:2]
-        tx = max(0, min(orig_w - 1, self.target_x))
-        ty = max(0, min(orig_h - 1, self.target_y))
+        with self.lock:
+            cur_tx = self.target_x
+            cur_ty = self.target_y
+        tx = max(0, min(orig_w - 1, cur_tx))
+        ty = max(0, min(orig_h - 1, cur_ty))
         med_z, std_z, valid_ratio = sample_roi_depth(depth_m, tx, ty, box_radius=15)
         t_depth_ms = (time.perf_counter() - t2) * 1000.0
 
-        # 5. Visualizations
+        # Visualizations
         t3 = time.perf_counter()
         target_panel_w, target_panel_h = 480, 270
         left_vis = cv2.resize(left_rect, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
@@ -227,7 +569,7 @@ class StereoPipeline:
         depth_colored = colorize_depth(depth_m, self.min_depth, self.max_depth)
         depth_vis = cv2.resize(depth_colored, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
 
-        # Draw target reticle on Left View and Depth View
+        # Draw target reticle
         scale_x = target_panel_w / float(orig_w)
         scale_y = target_panel_h / float(orig_h)
         scaled_tx = int(tx * scale_x)
@@ -244,7 +586,6 @@ class StereoPipeline:
             )
             cv2.circle(vis, (scaled_tx, scaled_ty), 3, (0, 0, 255), -1)
 
-        # Attach metric depth color legend
         depth_with_legend = attach_depth_legend(
             depth_vis,
             min_depth=self.min_depth,
@@ -252,25 +593,30 @@ class StereoPipeline:
             legend_width=70,
         )
 
-        # Assemble side-by-side composite: [Left | Disparity | Depth + Legend]
+        # Side-by-side composite: [Left | Disparity | Depth + Legend]
         composite = np.hstack((left_vis, disp_vis, depth_with_legend))
 
-        # Add clean, non-overlapping translucent dark HUD banner across the top
+        # HUD banner
         h_bar = 24
         banner_overlay = composite[0:h_bar, :].copy()
         cv2.rectangle(composite, (0, 0), (composite.shape[1], h_bar), (15, 23, 42), -1)
         cv2.addWeighted(composite[0:h_bar, :], 0.82, banner_overlay, 0.18, 0, composite[0:h_bar, :])
 
-        t_elapsed = time.perf_counter() - start_t
-        t_total_ms = t_elapsed * 1000.0
-        fps = 1.0 / max(1e-4, t_elapsed)
+        t_total_ms = (time.perf_counter() - submit_t) * 1000.0
+        now = time.perf_counter()
+        if self._last_completed_t > 0:
+            instant_fps = 1.0 / max(1e-4, now - self._last_completed_t)
+            self.fps = 0.85 * self.fps + 0.15 * instant_fps if self.fps > 0 else instant_fps
+        else:
+            self.fps = 1.0 / max(1e-4, time.perf_counter() - submit_t)
+        self._last_completed_t = now
 
         swap_tag = " [SWAPPED]" if self.swap_cameras else ""
+        gpu_tag = f" [GPU {gpu_id}]" if gpu_id is not None and len(self.gpu_ids) > 1 else ""
         banner_text = (
-            f"{self.active_estimator.name}{swap_tag} | {fps:.1f} FPS ({t_total_ms:.0f} ms) | "
+            f"{self.active_estimator.name}{gpu_tag}{swap_tag} | {self.fps:.1f} FPS ({t_total_ms:.0f} ms) | "
             f"Compactness: {compactness:.1f}% | Target: {med_z:.2f}m"
         )
-        # Single crisp white text render with dark pill backing
         cv2.putText(
             composite,
             banner_text,
@@ -286,27 +632,35 @@ class StereoPipeline:
         jpeg_bytes = jpeg_buf.tobytes()
         t_vis_ms = (time.perf_counter() - t3) * 1000.0
 
-        # Update shared state
         with self.lock:
             self.latest_left_rect = left_rect
             self.latest_disparity = disparity
             self.latest_depth_m = depth_m
             self.latest_composite_jpeg = jpeg_bytes
             self.preview_dims = (composite.shape[1], composite.shape[0])
-            self.fps = fps
             self.total_ms = t_total_ms
             self.t_rectify_ms = t_rectify_ms
             self.t_infer_ms = t_infer_ms
             self.t_depth_ms = t_depth_ms
             self.t_vis_ms = t_vis_ms
+            if t_net_recv_ms > 0:
+                self.t_net_recv_ms = t_net_recv_ms
+            if sender_fps > 0:
+                self.sender_fps = sender_fps
             self.compactness_pct = compactness
             self.target_depth_m = med_z
             self.target_std_m = std_z
             self.target_valid_ratio = valid_ratio
 
+    def stop(self) -> None:
+        """Terminates worker pool and background threads cleanly."""
+        self._running = False
+        if self.worker_pool is not None:
+            self.worker_pool.shutdown()
+
 
 class WebServerHandler(BaseHTTPRequestHandler):
-    """Serves the dashboard UI, MJPEG video feed, and depth query REST APIs."""
+    """Serves dashboard UI, MJPEG video feed, and depth query REST APIs."""
 
     pipeline: StereoPipeline
 
@@ -374,11 +728,13 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     "sender_fps": self.pipeline.sender_fps,
                     "swap_cameras": self.pipeline.swap_cameras,
                     "estimator": self.pipeline.active_estimator.name,
+                    "estimator_key": self.pipeline.active_estimator_name,
                     "compactness": self.pipeline.compactness_pct,
                     "target_depth": self.pipeline.target_depth_m,
                     "target_std": self.pipeline.target_std_m,
                     "target_x": self.pipeline.target_x,
                     "target_y": self.pipeline.target_y,
+                    "gpus": self.pipeline.gpu_ids,
                 }
             self._send_json(data)
         else:
@@ -392,7 +748,11 @@ class WebServerHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             name = query.get("name", ["crestereo"])[0]
             ok = self.pipeline.switch_estimator(name)
-            self._send_json({"success": ok, "estimator": name})
+            self._send_json({
+                "success": ok,
+                "estimator": self.pipeline.active_estimator_name,
+                "estimator_display": self.pipeline.active_estimator.name,
+            })
 
         elif path == "/api/swap_cameras":
             swapped = self.pipeline.toggle_swap_cameras()
@@ -440,7 +800,6 @@ class WebServerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
-        # Suppress noisy HTTP request logging
         return
 
 
@@ -455,9 +814,15 @@ def parse_args() -> argparse.Namespace:
     stage1_root = Path(__file__).resolve().parent
     parser.add_argument(
         "--estimator",
-        choices=["crestereo", "sgbm"],
+        choices=["crestereo", "sgbm", "hitnet"],
         default="crestereo",
-        help="Initial depth estimator (default: crestereo).",
+        help="Initial depth estimator: 'crestereo', 'sgbm', or 'hitnet' (default: crestereo).",
+    )
+    parser.add_argument(
+        "--gpus",
+        type=str,
+        default="0",
+        help="GPU device ID(s) to distribute inference across (e.g. '0', '0,1,2,3', or '4' for 4 GPUs). Default: 0.",
     )
     parser.add_argument(
         "--calibration",
@@ -470,6 +835,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=stage1_root / "models" / "crestereo_embedded.onnx",
         help="Path to CREStereo ONNX model file.",
+    )
+    parser.add_argument(
+        "--hitnet-model",
+        type=Path,
+        default=None,
+        help="Path to HITNet ONNX model file (defaults to auto-detection in models/).",
     )
     parser.add_argument(
         "--web-port",
@@ -505,9 +876,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    gpu_ids = parse_gpu_ids(args.gpus)
+
     print("=" * 70)
     print("  STAGE 1 STEREO VISION HARNESS")
     print(f"  Source: {args.source.upper()} | Initial Estimator: {args.estimator.upper()}")
+    print(f"  GPU Worker Devices: {gpu_ids} ({'Multi-GPU Parallel' if len(gpu_ids) > 1 else 'Single-GPU Sequential'})")
     print("=" * 70)
 
     # 1. Load calibration & epipolar rectification maps
@@ -521,6 +895,8 @@ def main() -> None:
         calibration=calib,
         initial_estimator_name=args.estimator,
         model_path=str(args.model),
+        hitnet_model_path=args.hitnet_model,
+        gpu_ids=gpu_ids,
     )
 
     # 3. Start Web Server in background thread
@@ -563,6 +939,8 @@ def main() -> None:
         while True:
             left_frame: np.ndarray | None = None
             right_frame: np.ndarray | None = None
+            recv_ms = 0.0
+            sender_fps = 0.0
 
             if args.source == "network":
                 pair = None
@@ -570,6 +948,8 @@ def main() -> None:
                     if pipeline._incoming_network_pair is not None:
                         pair = pipeline._incoming_network_pair
                         pipeline._incoming_network_pair = None
+                        recv_ms = pipeline.t_net_recv_ms
+                        sender_fps = pipeline.sender_fps
                 if pair is None and receiver is not None:
                     pair = receiver.get_latest_pair()
                 if pair is None:
@@ -589,7 +969,12 @@ def main() -> None:
                     continue
 
             if left_frame is not None and right_frame is not None:
-                pipeline.process_pair(left_frame, right_frame)
+                pipeline.submit_pair(
+                    left_frame,
+                    right_frame,
+                    recv_ms=recv_ms,
+                    sender_fps=sender_fps,
+                )
 
                 if args.display:
                     with pipeline.lock:
@@ -605,10 +990,13 @@ def main() -> None:
                             pipeline.switch_estimator("crestereo")
                         elif key == ord("2"):
                             pipeline.switch_estimator("sgbm")
+                        elif key == ord("3"):
+                            pipeline.switch_estimator("hitnet")
 
     except KeyboardInterrupt:
         print("\n[Harness] Terminating...")
     finally:
+        pipeline.stop()
         if receiver:
             receiver.stop()
         server.shutdown()
@@ -619,4 +1007,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
