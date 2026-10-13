@@ -17,7 +17,6 @@ def _setup_cuda_and_cudnn() -> None:
     """Preload cuDNN and CUDA libraries if installed via pip nvidia-* packages."""
     search_dirs = [p for p in sys.path if "site-packages" in p]
     for base in search_dirs:
-        # Check for nvidia/cudnn/lib and nvidia/cuda_runtime/lib
         for pkg in ("cudnn", "cuda_runtime", "cublas"):
             lib_dir = os.path.join(base, "nvidia", pkg, "lib")
             if os.path.isdir(lib_dir):
@@ -25,7 +24,11 @@ def _setup_cuda_and_cudnn() -> None:
                     os.environ["LD_LIBRARY_PATH"] = (
                         f"{lib_dir}:{os.environ.get('LD_LIBRARY_PATH', '')}"
                     )
-                for so in sorted(glob.glob(os.path.join(lib_dir, "*.so*"))):
+                # Load sub-libraries before main libcudnn.so.9 so dependencies resolve cleanly
+                all_sos = glob.glob(os.path.join(lib_dir, "*.so*"))
+                sub_libs = [s for s in all_sos if "libcudnn.so" not in os.path.basename(s)]
+                main_libs = [s for s in all_sos if "libcudnn.so" in os.path.basename(s)]
+                for so in sorted(sub_libs) + sorted(main_libs):
                     try:
                         ctypes.CDLL(so, mode=ctypes.RTLD_GLOBAL)
                     except Exception:
@@ -66,6 +69,7 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
 
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        session_options.log_severity_level = 3  # Suppress non-critical memcpy warnings
 
         available_providers = ort.get_available_providers()
         providers = []
@@ -77,7 +81,7 @@ class DeepCREStereoEstimator(BaseStereoEstimator):
                         "device_id": 0,
                         "arena_extend_strategy": "kNextPowerOfTwo",
                         "gpu_mem_limit": 4 * 1024 * 1024 * 1024,  # 4 GB
-                        "cudnn_conv_algo_search": "EXHAUSTIVE",
+                        "cudnn_conv_algo_search": "HEURISTIC",
                         "do_copy_in_default_stream": True,
                     },
                 )

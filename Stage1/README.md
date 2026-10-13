@@ -63,28 +63,33 @@ Because VS Code automatically forwards port **8080**, the camera sender now stre
 In your remote terminal inside VS Code:
 ```bash
 cd /data/thomas/Robot-Needs-Vision
-.venv/bin/python Stage1/harness.py --source network --web-port 8080
+./Stage1/run_harness.sh --source network --web-port 8080
 ```
+*(Or alternatively: `source .venv/bin/activate && python Stage1/harness.py --source network --web-port 8080`)*
+
 You will see:
 ```text
 [Calibration] Loaded successfully. Baseline: 59.79 mm | Rectified fx: 3803.9 px
-[Pipeline] Initializing active estimator: Deep CREStereo (CUDA/ONNX)...
+[CREStereo] Available ONNX providers: ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+[CREStereo] Active ONNX providers: ['CUDAExecutionProvider', 'CPUExecutionProvider']
 [WebUI] Interactive dashboard running at http://0.0.0.0:8080
-[Source] Waiting for frames from laptop...
+[Source] Waiting for frames from laptop on port 5555...
 ```
 
 ### Step 2: Stream Your Cameras from Your Laptop
 Open a PowerShell or Command Prompt terminal on your **local laptop** (inside `Robot-Needs-Vision\Stage1`):
 ```powershell
-python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --stream-scale 0.5
 ```
+> **Tip on `--stream-scale 0.5`**: Transmits $960 \times 540$ per eye ($1920 \times 540$ composite) instead of full 1080p. This cuts payload size by $>6\times$ (down to $\approx 45\text{ KB/frame}$), delivering smooth **25–30 FPS** over SSH/VPN tunnels without network congestion. The server automatically adapts the resolution for metric depth. For uncompressed full 1080p, pass `--stream-scale 1.0`.
+
 *(On Windows, `0` and `2` are typical for external stereo USB webcams. If your cameras use indices 1 and 2, use `--left-cam 1 --right-cam 2`).*
 
 You will see:
 ```text
 [LaptopSender] Connecting via HTTP to http://127.0.0.1:8080/api/push_frame...
-[LaptopSender] Connected! Streaming stereo frames directly via HTTP port 8080...
-[HTTP Streaming] 15.0 FPS | Frame size: 280.4 KB | Rate: 4.12 MB/s
+[LaptopSender] Connected! Streaming stereo frames via HTTP port 8080 (Scale: 0.50x | Quality: 80)...
+[HTTP Streaming] 28.5 FPS | Frame size: 45.2 KB | Rate: 1.26 MB/s
 ```
 
 ### Step 3: Open the Dashboard in Your Browser
@@ -180,4 +185,6 @@ During the evaluation, Teaching Assistants (TAs) will measure ground-truth dista
 | **Left and Right views look inverted** | Camera indices swapped | Swap `--left-cam` and `--right-cam` arguments when running `laptop_camera_sender.py`. |
 | **"Connection refused" on laptop** | Server harness is not running or port 5555 is blocked | Make sure `harness.py` is started on the server *before* running `laptop_camera_sender.py`, and ensure port 5555 is forwarded. |
 | **Web page cannot connect to 8080** | Port 8080 not forwarded | In VS Code, check the **Ports** tab and ensure port 8080 is listed as Forwarded. In terminal SSH, use `-L 8080:localhost:8080`. |
-| **Video feed is laggy** | USB bandwidth saturation | Set `--jpeg-quality 75` and `--fps-limit 25` in `laptop_camera_sender.py` to reduce bandwidth. |
+| **"libcudnn.so.9: cannot open shared object file"** / **Falls back to CPUExecutionProvider** | cuDNN 9 path not set in environment | Run via `./Stage1/run_harness.sh` or make sure `source .venv/bin/activate` was executed so `LD_LIBRARY_PATH` points to `.venv/.../nvidia/cudnn/lib`. |
+| **Client HTTP timeout / Low FPS (3–5 FPS)** | Sending unscaled 1080p over SSH/VPN tunnel saturates network bandwidth | Use `--stream-scale 0.5` in `laptop_camera_sender.py` (downsamples transmission from 287 KB to 45 KB per frame, boosting throughput to 25–30 FPS). |
+

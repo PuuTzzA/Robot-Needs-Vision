@@ -22,6 +22,7 @@ import platform
 import socket
 import struct
 import sys
+import threading
 import time
 import cv2
 import numpy as np
@@ -72,10 +73,22 @@ def parse_args() -> argparse.Namespace:
         help="Capture frame height (default: 1080).",
     )
     parser.add_argument(
+        "--stream-scale",
+        type=float,
+        default=0.5,
+        help="Downscale factor before transmitting (e.g. 0.5 for 960x540, 1.0 for 1080p). Default: 0.5.",
+    )
+    parser.add_argument(
         "--jpeg-quality",
         type=int,
         default=80,
         help="JPEG compression quality (1-100, default: 80).",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=10.0,
+        help="Network request timeout in seconds (default: 10.0).",
     )
     parser.add_argument(
         "--fps-limit",
@@ -111,9 +124,45 @@ def open_camera(idx: int, width: int, height: int, backend: int) -> cv2.VideoCap
     return cap
 
 
-def stream_http(args: argparse.Namespace, cam_l: cv2.VideoCapture, cam_r: cv2.VideoCapture) -> None:
+class CameraGrabber:
+    """Threaded camera grabber that decouples hardware acquisition from network transmission."""
+
+    def __init__(self, cam_l: cv2.VideoCapture, cam_r: cv2.VideoCapture) -> None:
+        self.cam_l = cam_l
+        self.cam_r = cam_r
+        self._latest_pair: tuple[np.ndarray, np.ndarray] | None = None
+        self._lock = threading.Lock()
+        self._running = True
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
+
+    def _capture_loop(self) -> None:
+        while self._running:
+            self.cam_l.grab()
+            self.cam_r.grab()
+            ret_l, frame_l = self.cam_l.retrieve()
+            ret_r, frame_r = self.cam_r.retrieve()
+            if ret_l and ret_r and frame_l is not None and frame_r is not None:
+                with self._lock:
+                    self._latest_pair = (frame_l, frame_r)
+            else:
+                time.sleep(0.005)
+
+    def get_latest_pair(self) -> tuple[np.ndarray, np.ndarray] | None:
+        with self._lock:
+            if self._latest_pair is None:
+                return None
+            return self._latest_pair[0].copy(), self._latest_pair[1].copy()
+
+    def stop(self) -> None:
+        self._running = False
+        self._thread.join(timeout=1.0)
+
+
+def stream_http(args: argparse.Namespace, grabber: CameraGrabber) -> None:
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), args.jpeg_quality]
     frame_interval = 1.0 / args.fps_limit if args.fps_limit > 0 else 0.0
+    scale = max(0.1, min(1.0, float(args.stream_scale)))
 
     headers = {
         "Content-Type": "image/jpeg",
@@ -123,9 +172,12 @@ def stream_http(args: argparse.Namespace, cam_l: cv2.VideoCapture, cam_r: cv2.Vi
     while True:
         try:
             print(f"[LaptopSender] Connecting via HTTP to http://{args.server}:{args.port}/api/push_frame...")
-            conn = http.client.HTTPConnection(args.server, args.port, timeout=4.0)
+            conn = http.client.HTTPConnection(args.server, args.port, timeout=args.timeout)
             conn.connect()
-            print(f"[LaptopSender] Connected! Streaming stereo frames directly via HTTP port {args.port}...")
+            print(
+                f"[LaptopSender] Connected! Streaming stereo frames via HTTP port {args.port} "
+                f"(Scale: {scale:.2f}x | Quality: {args.jpeg_quality})..."
+            )
 
             frame_count = 0
             fps_timer = time.perf_counter()
@@ -133,18 +185,22 @@ def stream_http(args: argparse.Namespace, cam_l: cv2.VideoCapture, cam_r: cv2.Vi
             while True:
                 loop_start = time.perf_counter()
 
-                # Synchronized shutter grab
-                cam_l.grab()
-                cam_r.grab()
-                ret_l, frame_l = cam_l.retrieve()
-                ret_r, frame_r = cam_r.retrieve()
-
-                if not ret_l or not ret_r or frame_l is None or frame_r is None:
-                    time.sleep(0.01)
+                pair = grabber.get_latest_pair()
+                if pair is None:
+                    time.sleep(0.005)
                     continue
+                frame_l, frame_r = pair
 
                 # Combine side-by-side: [Left | Right]
                 composite = np.hstack((frame_l, frame_r))
+
+                # Apply stream scaling to save network bandwidth if requested
+                if scale < 0.999:
+                    ch, cw = composite.shape[:2]
+                    target_w = int(cw * scale)
+                    target_h = int(ch * scale)
+                    composite = cv2.resize(composite, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
                 success, encoded_jpg = cv2.imencode(".jpg", composite, encode_param)
                 if not success:
                     continue
@@ -183,16 +239,20 @@ def stream_http(args: argparse.Namespace, cam_l: cv2.VideoCapture, cam_r: cv2.Vi
                 pass
 
 
-def stream_tcp(args: argparse.Namespace, cam_l: cv2.VideoCapture, cam_r: cv2.VideoCapture) -> None:
+def stream_tcp(args: argparse.Namespace, grabber: CameraGrabber) -> None:
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), args.jpeg_quality]
     frame_interval = 1.0 / args.fps_limit if args.fps_limit > 0 else 0.0
+    scale = max(0.1, min(1.0, float(args.stream_scale)))
 
     while True:
         try:
             print(f"[LaptopSender] Connecting via TCP to {args.server}:{args.port}...")
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.connect((args.server, args.port))
-            print(f"[LaptopSender] Connected! Streaming stereo frames via TCP port {args.port}...")
+            print(
+                f"[LaptopSender] Connected! Streaming stereo frames via TCP port {args.port} "
+                f"(Scale: {scale:.2f}x | Quality: {args.jpeg_quality})..."
+            )
 
             frame_count = 0
             fps_timer = time.perf_counter()
@@ -200,16 +260,19 @@ def stream_tcp(args: argparse.Namespace, cam_l: cv2.VideoCapture, cam_r: cv2.Vid
             while True:
                 loop_start = time.perf_counter()
 
-                cam_l.grab()
-                cam_r.grab()
-                ret_l, frame_l = cam_l.retrieve()
-                ret_r, frame_r = cam_r.retrieve()
-
-                if not ret_l or not ret_r or frame_l is None or frame_r is None:
-                    time.sleep(0.01)
+                pair = grabber.get_latest_pair()
+                if pair is None:
+                    time.sleep(0.005)
                     continue
+                frame_l, frame_r = pair
 
                 composite = np.hstack((frame_l, frame_r))
+                if scale < 0.999:
+                    ch, cw = composite.shape[:2]
+                    target_w = int(cw * scale)
+                    target_h = int(ch * scale)
+                    composite = cv2.resize(composite, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
                 success, encoded_jpg = cv2.imencode(".jpg", composite, encode_param)
                 if not success:
                     continue
@@ -262,12 +325,14 @@ def main() -> None:
     actual_h = int(cam_l.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"[LaptopSender] Left Camera resolution: {actual_w}x{actual_h}")
 
+    grabber = CameraGrabber(cam_l, cam_r)
     try:
         if args.protocol == "http":
-            stream_http(args, cam_l, cam_r)
+            stream_http(args, grabber)
         else:
-            stream_tcp(args, cam_l, cam_r)
+            stream_tcp(args, grabber)
     finally:
+        grabber.stop()
         cam_l.release()
         cam_r.release()
         print("[LaptopSender] Cameras released.")

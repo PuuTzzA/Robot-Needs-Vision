@@ -152,6 +152,12 @@ class StereoPipeline:
     def process_pair(self, left_raw: np.ndarray, right_raw: np.ndarray) -> None:
         start_t = time.perf_counter()
 
+        # Adapt to scaled network streams (e.g. 960x540) to match calibration maps
+        target_w, target_h = self.calib.target_width, self.calib.target_height
+        if left_raw.shape[1] != target_w or left_raw.shape[0] != target_h:
+            left_raw = cv2.resize(left_raw, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+            right_raw = cv2.resize(right_raw, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+
         # 1. Epipolar rectification
         left_rect, right_rect = self.calib.rectify_pair(left_raw, right_raw)
 

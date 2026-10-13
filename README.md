@@ -20,6 +20,16 @@ The project is designed to:
 Robot-Needs-Vision/
 ├── README.md
 ├── .gitignore
+├── Stage1/                               # Stage 1 Stereo Vision (Live GPU/Web Dashboard)
+│   ├── README.md                         # Stage 1 documentation & usage guide
+│   ├── harness.py                        # Master perception pipeline & web dashboard server
+│   ├── run_harness.sh                    # GPU runner script (auto cuDNN & LD_LIBRARY_PATH)
+│   ├── laptop_camera_sender.py           # Local client webcam streamer (HTTP/TCP)
+│   ├── test_stage1.py                    # Automated test suite
+│   ├── calibration/                      # Camera calibration matrices
+│   ├── estimators/                       # CREStereo & StereoSGBM depth estimators
+│   ├── models/                           # Neural network ONNX models
+│   └── static/                           # Interactive Web UI dashboard
 ├── binocular_stereo/
 │   ├── .gitignore
 │   ├── camera_test.py
@@ -47,9 +57,22 @@ Robot-Needs-Vision/
 │               └── crestereo_embedded.onnx
 ```
 
-## Main application
+## Stage 1: Binocular Stereo Vision & Metric Depth
 
-The most complete and documented implementation lives in:
+For Stage 1 perception (real-time epipolar rectification, modular depth estimators, interactive web dashboard, and live measuring-tape accuracy HUD), see **[Stage1/README.md](file:///data/thomas/Robot-Needs-Vision/Stage1/README.md)**.
+
+Quick run on GPU server:
+```bash
+./Stage1/run_harness.sh --source network --web-port 8080
+```
+Stream from laptop:
+```powershell
+python Stage1/laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --stream-scale 0.5
+```
+
+## Legacy / Final Project Application
+
+The earlier standalone macOS/CoreML implementation lives in:
 
 ```text
 binocular_stereo/finalProject/finalProject/
