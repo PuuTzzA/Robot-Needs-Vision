@@ -1,0 +1,26 @@
+{
+  "name": "butler",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@effect/ai-anthropic": "^4.0.6",
+    "@effect/ai-cloudflare": "^4.0.6",
+    "@effect/ai-openai": "^4.0.6",
+    "@effect/ai-openai-compat": "^4.0.6",
+    "@effect/ai-openrouter": "^4.0.6",
+    "@effect/platform-bun": "^4.0.6",
+    "effect": "^4.0.6",
+    "rclnodejs": "^2.3.0"
+  }
+}
