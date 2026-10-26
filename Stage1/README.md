@@ -157,6 +157,7 @@ Then open `http://localhost:8080` in your browser. It continuously feeds the cal
 | `--fps-limit` | float | `30.0` | Maximum capture FPS cap to throttle camera grabbing and USB bus saturation. |
 | `--width` | int | `1920` | Native hardware camera capture width in pixels. |
 | `--height` | int | `1080` | Native hardware camera capture height in pixels. |
+| `--http-conns` | int | `2` | Number of concurrent persistent HTTP connections for pipelined streaming (default: 2). Hides high network RTT / ping latency over SSH tunnels. |
 | `--timeout` | float | `5.0` | Network request and socket timeout in seconds. |
 
 ---

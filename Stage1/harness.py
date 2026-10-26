@@ -355,6 +355,7 @@ class StereoPipeline:
         self.output_frame_id: int = 0
         self.new_frame_cond = threading.Condition(self.lock)
         self.latest_payload_kb: float = 0.0
+        self._last_enqueued_seq: int = 0
 
     def set_depth_bounds(
         self,
@@ -421,8 +422,13 @@ class StereoPipeline:
         recv_ms: float = 0.0,
         sender_fps: float = 0.0,
         payload_kb: float = 0.0,
+        seq: int = 0,
     ) -> None:
         with self.lock:
+            if seq > 0 and seq <= self._last_enqueued_seq:
+                return  # Drop older out-of-order frame from concurrent workers
+            if seq > 0:
+                self._last_enqueued_seq = seq
             self._incoming_network_pair = (left, right)
             if recv_ms > 0:
                 self.t_net_recv_ms = recv_ms
@@ -853,10 +859,15 @@ class WebServerHandler(BaseHTTPRequestHandler):
             t_recv_start = time.perf_counter()
             content_length = int(self.headers.get("Content-Length", 0))
             sender_fps_header = self.headers.get("X-Sender-FPS", "0.0")
+            seq_header = self.headers.get("X-Frame-Sequence", "0")
             try:
                 sender_fps = float(sender_fps_header)
             except ValueError:
                 sender_fps = 0.0
+            try:
+                seq = int(seq_header)
+            except ValueError:
+                seq = 0
 
             if content_length > 0:
                 payload = self.rfile.read(content_length)
@@ -870,7 +881,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     t_recv_ms = (time.perf_counter() - t_recv_start) * 1000.0
                     payload_kb = len(payload) / 1024.0
                     self.pipeline.enqueue_network_pair(
-                        left_frame, right_frame, recv_ms=t_recv_ms, sender_fps=sender_fps, payload_kb=payload_kb
+                        left_frame, right_frame, recv_ms=t_recv_ms, sender_fps=sender_fps, payload_kb=payload_kb, seq=seq
                     )
             self._send_json({"success": True})
         else:

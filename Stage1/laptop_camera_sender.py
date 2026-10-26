@@ -89,6 +89,12 @@ def parse_args() -> argparse.Namespace:
         help="JPEG compression quality (1-100, default: 60). Quality 60 cuts frame size by ~55%% with <0.35px disparity error.",
     )
     parser.add_argument(
+        "--http-conns",
+        type=int,
+        default=2,
+        help="Number of concurrent persistent HTTP connections for pipelined streaming (default: 2). Overlaps network RTT latency.",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=5.0,
@@ -121,10 +127,27 @@ def open_camera(idx: int, width: int, height: int, backend: int) -> cv2.VideoCap
             f"Could not open camera device {idx}. Check connections and permissions."
         )
 
-    # Configure MJPG format for high-speed USB 1080p capture if supported
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    # In DirectShow, resolution must be set FIRST, then FOURCC=MJPG, then FPS=30.
+    # Setting FOURCC before resolution causes DirectShow to reset to uncompressed YUY2!
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    cap.set(cv2.CAP_PROP_FPS, 30.0)
+
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    actual_fps = float(cap.get(cv2.CAP_PROP_FPS))
+    fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+    fcc_chars = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+
+    print(
+        f"[LaptopSender] Camera {idx} initialized: {actual_w}x{actual_h} @ {actual_fps:.1f} FPS (FOURCC: '{fcc_chars}')"
+    )
+    if actual_fps < 10.0 or fcc_chars.upper() == "YUY2":
+        print(
+            f"[LaptopSender] ⚠️ Camera {idx} negotiated low FPS ({actual_fps:.1f}) or uncompressed YUY2. "
+            f"If USB bandwidth is limited, try passing '--width 1280 --height 720'."
+        )
     return cap
 
 
@@ -138,6 +161,9 @@ class CameraGrabber:
         self._frame_id = 0
         self._lock = threading.Lock()
         self._running = True
+        self.grab_count = 0
+        self.grab_fps = 0.0
+        self._fps_timer = time.perf_counter()
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
 
@@ -150,7 +176,14 @@ class CameraGrabber:
             if ret_l and ret_r and frame_l is not None and frame_r is not None:
                 with self._lock:
                     self._frame_id += 1
+                    self.grab_count += 1
                     self._latest_pair = (frame_l, frame_r)
+                    now = time.perf_counter()
+                    dt = now - self._fps_timer
+                    if dt >= 1.0:
+                        self.grab_fps = self.grab_count / dt
+                        self.grab_count = 0
+                        self._fps_timer = now
             else:
                 time.sleep(0.005)
 
@@ -160,31 +193,43 @@ class CameraGrabber:
                 return None
             return self._latest_pair[0].copy(), self._latest_pair[1].copy(), self._frame_id
 
+    def get_grab_fps(self) -> float:
+        with self._lock:
+            return self.grab_fps
+
     def stop(self) -> None:
         self._running = False
         self._thread.join(timeout=1.0)
 
 
-class HttpSendWorker:
-    """Asynchronous background worker that transmits frames over persistent HTTP.
+class HttpSendWorkerPool:
+    """Asynchronous multi-connection HTTP worker pool.
     
-    Decouples frame capture/encoding from network round-trips. Uses a 1-item queue
-    to drop stale frames when network stalls, preventing latency buildup.
+    Uses multiple persistent HTTP connections to overlap network Round-Trip Time (RTT).
+    While connection A is waiting for HTTP 200 response, connection B is already transmitting
+    the next frame, breaking the stop-and-wait latency ceiling.
     """
 
-    def __init__(self, server: str, port: int, timeout: float = 5.0) -> None:
+    def __init__(self, server: str, port: int, num_conns: int = 2, timeout: float = 5.0) -> None:
         self.server = server
         self.port = port
+        self.num_conns = max(1, num_conns)
         self.timeout = timeout
-        self.queue: queue.Queue[tuple[bytes, float, int]] = queue.Queue(maxsize=1)
+        self.queue: queue.Queue[tuple[bytes, float, int]] = queue.Queue(maxsize=self.num_conns)
         self.running = True
         self.sent_count = 0
         self.sent_bytes = 0
         self.current_fps = 0.0
         self.last_payload_kb = 0.0
-        self._conn: http.client.HTTPConnection | None = None
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
+        self._rtt_accum = 0.0
+        self._rtt_samples = 0
+        self._lock = threading.Lock()
+        self.threads = [
+            threading.Thread(target=self._worker_loop, args=(i,), daemon=True)
+            for i in range(self.num_conns)
+        ]
+        for t in self.threads:
+            t.start()
 
     def submit_frame(self, payload: bytes, timestamp: float, seq: int) -> None:
         try:
@@ -199,25 +244,12 @@ class HttpSendWorker:
             except queue.Full:
                 pass
 
-    def _get_connection(self) -> http.client.HTTPConnection:
-        if self._conn is None:
-            self._conn = http.client.HTTPConnection(self.server, self.port, timeout=self.timeout)
-            self._conn.connect()
-        return self._conn
-
-    def _close_connection(self) -> None:
-        if self._conn is not None:
-            try:
-                self._conn.close()
-            except Exception:
-                pass
-            self._conn = None
-
-    def _run(self) -> None:
+    def _worker_loop(self, worker_id: int) -> None:
         headers = {
             "Content-Type": "image/jpeg",
             "Connection": "keep-alive",
         }
+        conn: http.client.HTTPConnection | None = None
         while self.running:
             try:
                 payload, timestamp, seq = self.queue.get(timeout=0.1)
@@ -225,27 +257,60 @@ class HttpSendWorker:
                 continue
 
             try:
-                conn = self._get_connection()
+                if conn is None:
+                    conn = http.client.HTTPConnection(self.server, self.port, timeout=self.timeout)
+                    conn.connect()
+
                 req_headers = dict(headers)
                 req_headers["X-Capture-Timestamp"] = f"{timestamp:.4f}"
-                req_headers["X-Sender-FPS"] = f"{self.current_fps:.1f}"
+                with self._lock:
+                    fps_val = self.current_fps
+                req_headers["X-Sender-FPS"] = f"{fps_val:.1f}"
                 req_headers["X-Frame-Sequence"] = str(seq)
 
+                t0 = time.perf_counter()
                 conn.request("POST", "/api/push_frame", body=payload, headers=req_headers)
                 res = conn.getresponse()
                 res.read()
+                rtt = (time.perf_counter() - t0) * 1000.0
 
-                self.sent_count += 1
-                self.sent_bytes += len(payload)
-                self.last_payload_kb = len(payload) / 1024.0
-            except (ConnectionRefusedError, BrokenPipeError, ConnectionResetError, http.client.HTTPException, socket.timeout, OSError) as e:
-                self._close_connection()
+                with self._lock:
+                    self.sent_count += 1
+                    self.sent_bytes += len(payload)
+                    self.last_payload_kb = len(payload) / 1024.0
+                    self._rtt_accum += rtt
+                    self._rtt_samples += 1
+            except (ConnectionRefusedError, BrokenPipeError, ConnectionResetError, http.client.HTTPException, socket.timeout, OSError):
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
                 time.sleep(1.0)
+
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def get_and_reset_stats(self, dt: float) -> tuple[float, float, float, float]:
+        with self._lock:
+            self.current_fps = self.sent_count / dt if dt > 0 else 0.0
+            rate_mb = (self.sent_bytes / (1024.0 * 1024.0)) / dt if dt > 0 else 0.0
+            avg_rtt = (self._rtt_accum / self._rtt_samples) if self._rtt_samples > 0 else 0.0
+            kb = self.last_payload_kb
+            self.sent_count = 0
+            self.sent_bytes = 0
+            self._rtt_accum = 0.0
+            self._rtt_samples = 0
+            return self.current_fps, rate_mb, avg_rtt, kb
 
     def stop(self) -> None:
         self.running = False
-        self._close_connection()
-        self.thread.join(timeout=1.0)
+        for t in self.threads:
+            t.join(timeout=1.0)
 
 
 class TcpSendWorker:
@@ -309,7 +374,7 @@ class TcpSendWorker:
                 self.sent_count += 1
                 self.sent_bytes += len(payload)
                 self.last_payload_kb = len(payload) / 1024.0
-            except (ConnectionRefusedError, BrokenPipeError, ConnectionResetError, socket.timeout, OSError) as e:
+            except (ConnectionRefusedError, BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
                 self._close_socket()
                 time.sleep(1.0)
 
@@ -323,16 +388,17 @@ def stream_http(args: argparse.Namespace, grabber: CameraGrabber) -> None:
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), args.jpeg_quality]
     frame_interval = 1.0 / args.fps_limit if args.fps_limit > 0 else 0.0
     scale = max(0.1, min(1.0, float(args.stream_scale)))
+    num_conns = max(1, int(args.http_conns))
 
     target_w_eye = int(round(args.width * scale))
     target_h_eye = int(round(args.height * scale))
     print(
         f"[LaptopSender] Configuration: Scale {scale:.2f}x ({target_w_eye}x{target_h_eye} per eye, "
-        f"{target_w_eye * 2}x{target_h_eye} composite) | JPEG Quality: {args.jpeg_quality}"
+        f"{target_w_eye * 2}x{target_h_eye} composite) | JPEG Quality: {args.jpeg_quality} | HTTP Conns: {num_conns}"
     )
-    print(f"[LaptopSender] Starting asynchronous HTTP sender to http://{args.server}:{args.port}...")
+    print(f"[LaptopSender] Starting pipelined HTTP sender to http://{args.server}:{args.port}...")
 
-    worker = HttpSendWorker(args.server, args.port, timeout=args.timeout)
+    worker_pool = HttpSendWorkerPool(args.server, args.port, num_conns=num_conns, timeout=args.timeout)
     last_seq = -1
     fps_timer = time.perf_counter()
 
@@ -364,19 +430,18 @@ def stream_http(args: argparse.Namespace, grabber: CameraGrabber) -> None:
                 continue
 
             payload = encoded_jpg.tobytes()
-            worker.submit_frame(payload, time.time(), seq)
+            worker_pool.submit_frame(payload, time.time(), seq)
 
             now = time.perf_counter()
             if now - fps_timer >= 1.0:
                 dt = now - fps_timer
-                worker.current_fps = worker.sent_count / dt
-                rate_mb = (worker.sent_bytes / (1024.0 * 1024.0)) / dt
+                net_fps, rate_mb, avg_rtt, kb = worker_pool.get_and_reset_stats(dt)
+                cam_fps = grabber.get_grab_fps()
+                rtt_str = f"{avg_rtt:.0f} ms" if avg_rtt > 0 else "-- ms"
                 sys.stdout.write(
-                    f"\r[HTTP Streaming] {worker.current_fps:.1f} FPS | Frame size: {worker.last_payload_kb:.1f} KB | Rate: {rate_mb:.2f} MB/s"
+                    f"\r[Stream] Camera: {cam_fps:.1f} FPS | Network: {net_fps:.1f} FPS | RTT: {rtt_str} | Frame: {kb:.1f} KB | Rate: {rate_mb:.2f} MB/s"
                 )
                 sys.stdout.flush()
-                worker.sent_count = 0
-                worker.sent_bytes = 0
                 fps_timer = now
 
             elapsed = time.perf_counter() - loop_start
@@ -386,7 +451,7 @@ def stream_http(args: argparse.Namespace, grabber: CameraGrabber) -> None:
     except KeyboardInterrupt:
         print("\n[LaptopSender] Stopped by user.")
     finally:
-        worker.stop()
+        worker_pool.stop()
 
 
 def stream_tcp(args: argparse.Namespace, grabber: CameraGrabber) -> None:
@@ -437,10 +502,11 @@ def stream_tcp(args: argparse.Namespace, grabber: CameraGrabber) -> None:
             now = time.perf_counter()
             if now - fps_timer >= 1.0:
                 dt = now - fps_timer
-                worker.current_fps = worker.sent_count / dt
+                net_fps = worker.sent_count / dt
                 rate_mb = (worker.sent_bytes / (1024.0 * 1024.0)) / dt
+                cam_fps = grabber.get_grab_fps()
                 sys.stdout.write(
-                    f"\r[TCP Streaming] {worker.current_fps:.1f} FPS | Frame size: {worker.last_payload_kb:.1f} KB | Rate: {rate_mb:.2f} MB/s"
+                    f"\r[Stream] Camera: {cam_fps:.1f} FPS | Network: {net_fps:.1f} FPS | Frame: {worker.last_payload_kb:.1f} KB | Rate: {rate_mb:.2f} MB/s"
                 )
                 sys.stdout.flush()
                 worker.sent_count = 0
@@ -467,10 +533,6 @@ def main() -> None:
 
     cam_l = open_camera(args.left_cam, args.width, args.height, backend)
     cam_r = open_camera(args.right_cam, args.width, args.height, backend)
-
-    actual_w = int(cam_l.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cam_l.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[LaptopSender] Left Camera resolution: {actual_w}x{actual_h}")
 
     grabber = CameraGrabber(cam_l, cam_r)
     try:
