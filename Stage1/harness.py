@@ -352,6 +352,9 @@ class StereoPipeline:
         self.target_std_m: float = float("nan")
         self.target_valid_ratio: float = 0.0
         self._incoming_network_pair: tuple[np.ndarray, np.ndarray] | None = None
+        self.output_frame_id: int = 0
+        self.new_frame_cond = threading.Condition(self.lock)
+        self.latest_payload_kb: float = 0.0
 
     def set_depth_bounds(
         self,
@@ -417,6 +420,7 @@ class StereoPipeline:
         right: np.ndarray,
         recv_ms: float = 0.0,
         sender_fps: float = 0.0,
+        payload_kb: float = 0.0,
     ) -> None:
         with self.lock:
             self._incoming_network_pair = (left, right)
@@ -424,6 +428,8 @@ class StereoPipeline:
                 self.t_net_recv_ms = recv_ms
             if sender_fps > 0:
                 self.sender_fps = sender_fps
+            if payload_kb > 0:
+                self.latest_payload_kb = payload_kb
 
     def toggle_swap_cameras(self) -> bool:
         with self.lock:
@@ -676,11 +682,12 @@ class StereoPipeline:
             cv2.LINE_AA,
         )
 
-        _, jpeg_buf = cv2.imencode(".jpg", composite, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        _, jpeg_buf = cv2.imencode(".jpg", composite, [cv2.IMWRITE_JPEG_QUALITY, 70])
         jpeg_bytes = jpeg_buf.tobytes()
         t_vis_ms = (time.perf_counter() - t3) * 1000.0
 
         with self.lock:
+            self.output_frame_id += 1
             self.latest_left_rect = left_rect
             self.latest_disparity = disparity
             self.latest_depth_m = depth_m
@@ -699,10 +706,13 @@ class StereoPipeline:
             self.target_depth_m = med_z
             self.target_std_m = std_z
             self.target_valid_ratio = valid_ratio
+            self.new_frame_cond.notify_all()
 
     def stop(self) -> None:
         """Terminates worker pool and background threads cleanly."""
         self._running = False
+        with self.lock:
+            self.new_frame_cond.notify_all()
         if self.worker_pool is not None:
             self.worker_pool.shutdown()
 
@@ -739,10 +749,16 @@ class WebServerHandler(BaseHTTPRequestHandler):
                 "Content-Type", "multipart/x-mixed-replace; boundary=frame"
             )
             self.end_headers()
-            while True:
-                time.sleep(0.03)
-                with self.pipeline.lock:
+            last_frame_id = -1
+            while self.pipeline._running:
+                with self.pipeline.new_frame_cond:
+                    while self.pipeline.output_frame_id == last_frame_id and self.pipeline._running:
+                        self.pipeline.new_frame_cond.wait(timeout=0.2)
+                    if not self.pipeline._running:
+                        break
                     frame = self.pipeline.latest_composite_jpeg
+                    last_frame_id = self.pipeline.output_frame_id
+
                 if frame is None:
                     continue
                 try:
@@ -752,6 +768,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(frame)
                     self.wfile.write(b"\r\n")
+                    self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     break
 
@@ -786,6 +803,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     "min_depth": self.pipeline.min_depth,
                     "max_depth": self.pipeline.max_depth,
                     "resilient_voids": self.pipeline.resilient_voids,
+                    "payload_kb": self.pipeline.latest_payload_kb,
                 }
             self._send_json(data)
         else:
@@ -850,8 +868,9 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     left_frame = composite[:, :mid_x]
                     right_frame = composite[:, mid_x:]
                     t_recv_ms = (time.perf_counter() - t_recv_start) * 1000.0
+                    payload_kb = len(payload) / 1024.0
                     self.pipeline.enqueue_network_pair(
-                        left_frame, right_frame, recv_ms=t_recv_ms, sender_fps=sender_fps
+                        left_frame, right_frame, recv_ms=t_recv_ms, sender_fps=sender_fps, payload_kb=payload_kb
                     )
             self._send_json({"success": True})
         else:

@@ -557,8 +557,14 @@
         document.getElementById('bd-rectify').innerText = `${(data.rectify_ms || 0).toFixed(1)} ms`;
         document.getElementById('bd-depth').innerText = `${(data.depth_ms || 0).toFixed(1)} ms`;
         document.getElementById('bd-vis').innerText = `${(data.vis_ms || 0).toFixed(1)} ms`;
-        const senderFpsTxt = data.sender_fps > 0 ? ` (Sender: ${data.sender_fps.toFixed(1)} FPS)` : '';
-        document.getElementById('bd-net').innerText = `${(data.net_recv_ms || 0).toFixed(1)} ms${senderFpsTxt}`;
+        let netDetails = '';
+        if (data.sender_fps > 0 || data.payload_kb > 0) {
+          const parts = [];
+          if (data.sender_fps > 0) parts.push(`${data.sender_fps.toFixed(1)} FPS`);
+          if (data.payload_kb > 0) parts.push(`${data.payload_kb.toFixed(1)} KB`);
+          netDetails = ` (Sender: ${parts.join(', ')})`;
+        }
+        document.getElementById('bd-net').innerText = `${(data.net_recv_ms || 0).toFixed(1)} ms${netDetails}`;
 
         updateSwapButtonUI(data.swap_cameras);
 

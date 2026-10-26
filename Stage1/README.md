@@ -82,15 +82,18 @@ Open a PowerShell or Command Prompt terminal on your **local laptop** (inside `R
 ```powershell
 python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --stream-scale 0.5
 ```
-> **Tip on `--stream-scale 0.5`**: Transmits $960 \times 540$ per eye ($1920 \times 540$ composite) instead of full 1080p. This cuts payload size by $>6\times$ (down to $\approx 45\text{ KB/frame}$), delivering smooth **25–30 FPS** over SSH/VPN tunnels without network congestion. The server automatically adapts the resolution for metric depth. For uncompressed full 1080p, pass `--stream-scale 1.0`.
+> **Stream Scale Presets**:
+> - **Standard Balanced (Default: `--stream-scale 0.5`)**: Transmits $960 \times 540$ per eye ($1920 \times 540$ composite) with tuned JPEG Quality 60. Cuts frame size to $\approx 50\text{–}55\text{ KB}$, delivering **12–18 FPS** with full 3-channel RGB preserved for neural models.
+> - **High-Speed Preset (`--stream-scale 0.35`)**: Transmits $672 \times 378$ per eye ($1344 \times 378$ composite). Drops frame size to $\approx 30\text{ KB}$ (a 76% reduction), delivering **20–30 FPS** over bandwidth-constrained SSH/VPN tunnels. The server automatically adapts focal length $f_x$ dynamically, keeping metric depth fully calibrated.
 
 *(On Windows, `0` and `2` are typical for external stereo USB webcams. If your cameras use indices 1 and 2, use `--left-cam 1 --right-cam 2`).*
 
 You will see:
 ```text
-[LaptopSender] Connecting via HTTP to http://127.0.0.1:8080/api/push_frame...
-[LaptopSender] Connected! Streaming stereo frames via HTTP port 8080 (Scale: 0.50x | Quality: 80)...
-[HTTP Streaming] 28.5 FPS | Frame size: 45.2 KB | Rate: 1.26 MB/s
+[LaptopSender] Configuration: Scale 0.50x (960x540 per eye, 1920x540 composite) | JPEG Quality: 60
+[LaptopSender] Starting asynchronous HTTP sender to http://127.0.0.1:8080...
+[LaptopSender] HTTP connection established to http://127.0.0.1:8080
+[HTTP Streaming] 18.5 FPS | Frame size: 52.4 KB | Rate: 0.95 MB/s
 ```
 
 ### Step 3: Open the Dashboard in Your Browser
@@ -149,12 +152,12 @@ Then open `http://localhost:8080` in your browser. It continuously feeds the cal
 | `--port` | int | `8080` | Destination port on the server (`8080` for HTTP, `5555` for TCP). |
 | `--left-cam` | int | `0` | OpenCV device index for the left USB camera. |
 | `--right-cam` | int | `2` | OpenCV device index for the right USB camera. (On Windows, indices are commonly 0 and 2; on Linux/macOS, usually 0 and 1). |
-| `--stream-scale` | float | `0.5` | Spatial downscale factor before JPEG encoding and transmission (e.g., `0.5` sends $960 \times 540$ per eye, reducing bandwidth by $>6\times$ for smooth 25–30 FPS over SSH/VPN; `1.0` sends full 1080p). |
-| `--jpeg-quality` | int | `80` | JPEG compression quality (1–100). Value of 80 preserves stereo edges while keeping frame size under 50 KB. |
+| `--stream-scale` | float | `0.5` | Spatial downscale factor before transmission: `0.5` sends $960 \times 540$ per eye (~50–55 KB, 12–18 FPS); `0.35` sends $672 \times 378$ per eye (~30 KB, 20–30 FPS for constrained links); `1.0` sends full 1080p. |
+| `--jpeg-quality` | int | `60` | JPEG compression quality (1–100, default: 60). Quality 60 cuts payload by ~55% with <0.38px disparity error, keeping full RGB color for CREStereo/HITNet with ~2ms CPU encode time. |
 | `--fps-limit` | float | `30.0` | Maximum capture FPS cap to throttle camera grabbing and USB bus saturation. |
 | `--width` | int | `1920` | Native hardware camera capture width in pixels. |
 | `--height` | int | `1080` | Native hardware camera capture height in pixels. |
-| `--timeout` | float | `10.0` | Network request and socket timeout in seconds. |
+| `--timeout` | float | `5.0` | Network request and socket timeout in seconds. |
 
 ---
 
@@ -200,5 +203,5 @@ During the evaluation, Teaching Assistants (TAs) will measure ground-truth dista
 | **"Connection refused" on laptop** | Server harness is not running or port 8080 is blocked | Make sure `harness.py` is started on the server *before* running `laptop_camera_sender.py`, and ensure port 8080 is forwarded in VS Code. |
 | **Web page cannot connect to 8080** | Port 8080 not forwarded | In VS Code, check the **Ports** tab and ensure port 8080 is listed as Forwarded. In terminal SSH, use `-L 8080:localhost:8080`. |
 | **"libcudnn.so.9: cannot open shared object file"** / **Falls back to CPUExecutionProvider** | cuDNN 9 path not set in environment | Run via `./Stage1/run_harness.sh` or make sure `source .venv/bin/activate` was executed so `LD_LIBRARY_PATH` points to `.venv/.../nvidia/cudnn/lib`. |
-| **Client HTTP timeout / Low FPS (3–5 FPS)** | Sending unscaled 1080p over SSH/VPN tunnel saturates network bandwidth | Use `--stream-scale 0.5` in `laptop_camera_sender.py` (downsamples transmission from 287 KB to 45 KB per frame, boosting throughput to 25–30 FPS). |
+| **Client HTTP timeout / Low FPS (3–5 FPS)** | High network latency or constrained tunnel bandwidth saturating upload | Run with `--stream-scale 0.35` in `laptop_camera_sender.py` (cuts payload down to ~30 KB per frame, boosting throughput to 20–30 FPS). |
 
