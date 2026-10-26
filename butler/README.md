@@ -67,6 +67,8 @@ search/inventory. Driving and capture are sequential; up to three location
 analyses run while driving continues. Vision gets both views; the LLM only gets
 the left image plus detections/heights. Final synthesis overlaps the return home,
 and output waits for both to finish. Raw evidence accompanies each analysis.
+Each LLM request retries up to twice with exponential backoff starting at one
+second. Retries remain within the level timeout and do not repeat driving or capture.
 
 Mocks return fixed data (empty image files for camera) without tracking levels
 or positions. Every mock call

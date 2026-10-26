@@ -1,10 +1,12 @@
-import { Cause, Console, Effect, Queue, Schema, Stream } from "effect";
+import { Cause, Console, Effect, Queue, Schedule, Schema, Stream } from "effect";
 import { LanguageModel, Prompt } from "effect/ai";
 import { coordinates, Destination } from "./domain.ts";
 import { Camera, type Image, type StereoPair } from "./services/camera.ts";
 import { Navigation } from "./services/navigation.ts";
 import { Transport } from "./services/transport.ts";
 import { Vision } from "./services/vision.ts";
+
+const retryLlm = Effect.retry({ times: 2, schedule: Schedule.exponential("1 second") });
 
 const imagePart = Effect.fnUntraced(function*(file: Image) {
   const buffer = yield* Effect.tryPromise(() => file.arrayBuffer());
@@ -44,7 +46,7 @@ export const runLevel = Effect.gen(function*() {
         "Valid points: E1, E2, M1, M2, D1, D2. For a search or inventory, return 'all'.",
         [boardPart],
       ),
-    });
+    }).pipe(retryLlm);
 
     const destinations = plan.value.destinations === "all" ? Destination.literals : plan.value.destinations;
     const route = yield* navigation.order(new Set(destinations));
@@ -64,7 +66,7 @@ export const runLevel = Effect.gen(function*() {
           "and uncertainty using the image and YOLO/depth output. Do not infer unvisited locations or a global count.",
           [boardPart, evidence, image],
         ),
-      });
+      }).pipe(retryLlm);
       return [evidence, image, Prompt.makePart("text", { text: `${destination} analysis: ${analysis.text}` })];
     });
 
@@ -92,7 +94,7 @@ export const runLevel = Effect.gen(function*() {
           "State uncertainty or missing evidence; never invent measurements. Keep the answer concise.",
           [boardPart, ...observations.flat()],
         ),
-      });
+      }).pipe(retryLlm);
       return response.text;
     });
 
