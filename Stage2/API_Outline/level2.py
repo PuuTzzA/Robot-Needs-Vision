@@ -1,20 +1,21 @@
 from google import genai
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from category import Category
-from waypoint import Waypoints, Waypoint
+from category import Categorys, Category
+from Stage2.API_Outline.waypoint import Waypoints, Waypoint
 
 client = genai.Client()
 
 promptTask = """
 Analyze the attached photo of the laptop screen displaying task instructions.
 The task instruction is in the format of:
-Please go to Point X and identify the object there. 
-There are two points we need to go to. 
+Please find the point where X is located.
+There are two points we need to find.
+X stands for an object category. 
 
-The known locations are: Point B, Point C, Point D, Point E, Point F, Point G, Point H, Point I, Point J.
+Known object categories: Clock, Teddy Bear, Bowl, Apple, Banana, Vase, Cup, Cake, Bottle, Book
 
-Return the points we need to visit. 
+Return the categories we need to visit. 
 """
 
 interaction = client.interactions.create(

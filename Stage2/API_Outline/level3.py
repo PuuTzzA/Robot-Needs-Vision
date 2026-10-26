@@ -2,7 +2,7 @@ from google import genai
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from category import Categorys, Category
-from waypoint import Waypoints, Waypoint
+from Stage2.API_Outline.waypoint import Waypoints, Waypoint
 
 client = genai.Client()
 
