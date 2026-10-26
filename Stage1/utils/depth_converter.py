@@ -10,22 +10,41 @@ def disparity_to_depth(
     focal_length_px: float,
     baseline_m: float,
     min_disparity: float = 0.5,
-    min_depth: float = 0.2,
-    max_depth: float = 10.0,
+    min_depth: float = 0.3,
+    max_depth: float = 15.0,
+    resilient_voids: bool = True,
 ) -> np.ndarray:
     """Convert a 2D disparity map (in pixels) into absolute metric depth (in metres).
 
     Formula: Z = (fx * B) / d
+    If resilient_voids is True, far background / near-infinity pixels (very small positive
+    or slight negative calibration residual disparities >= -1.5) are clamped to max_depth
+    instead of being discarded as voids/holes, preserving 100% density across far surfaces.
     """
     depth = np.full(disparity.shape, np.nan, dtype=np.float32)
-    valid = np.isfinite(disparity) & (disparity >= min_disparity)
-    
-    calculated = np.zeros_like(disparity)
-    calculated[valid] = (focal_length_px * baseline_m) / disparity[valid]
-    
-    # Filter out physical depth outliers
-    depth_valid = valid & (calculated >= min_depth) & (calculated <= max_depth)
-    depth[depth_valid] = calculated[depth_valid]
+    min_valid_d = (focal_length_px * baseline_m) / max_depth
+
+    if resilient_voids:
+        disp_work = disparity.copy()
+        # Pixels with finite disparity that are smaller than min_valid_d down to -1.5
+        # (typical residual calibration epipolar noise at infinity for deep stereo networks)
+        far_mask = np.isfinite(disp_work) & (disp_work >= -1.5) & (disp_work < min_valid_d)
+        disp_work[far_mask] = min_valid_d
+
+        valid = np.isfinite(disp_work) & (disp_work >= min_valid_d)
+        calculated = np.zeros_like(disparity)
+        calculated[valid] = (focal_length_px * baseline_m) / disp_work[valid]
+
+        depth_valid = valid & (calculated >= min_depth)
+        depth[depth_valid] = np.clip(calculated[depth_valid], min_depth, max_depth)
+    else:
+        valid = np.isfinite(disparity) & (disparity >= min_disparity)
+        calculated = np.zeros_like(disparity)
+        calculated[valid] = (focal_length_px * baseline_m) / np.maximum(disparity[valid], 1e-4)
+
+        depth_valid = valid & (calculated >= min_depth) & (calculated <= max_depth)
+        depth[depth_valid] = calculated[depth_valid]
+
     return depth
 
 
@@ -54,26 +73,25 @@ def colorize_disparity(
 
 def colorize_depth(
     depth: np.ndarray,
-    min_depth: float = 0.4,
-    max_depth: float = 4.0,
+    min_depth: float = 0.3,
+    max_depth: float = 15.0,
     colormap: int = cv2.COLORMAP_TURBO,
 ) -> np.ndarray:
     """Colorize absolute depth using Turbo colormap (warm=near, cool=far).
     
-    Invalid pixels (NaN or out of bounds) are shown in solid black.
+    Valid depth values in [min_depth, max_depth] are mapped continuously across the colormap.
+    Depths at or beyond max_depth are assigned the far-end colormap color (cool blue),
+    preventing far background from appearing as black voids.
+    Invalid pixels (NaN or <= 0) remain solid black.
     """
     vis = np.zeros((*depth.shape, 3), dtype=np.uint8)
-    valid = np.isfinite(depth) & (depth >= min_depth) & (depth <= max_depth)
+    valid = np.isfinite(depth) & (depth >= min_depth)
     if not np.any(valid):
         return vis
 
     # Map [min_depth, max_depth] linearly to [0, 255]
-    # 0 = close (red/warm in Turbo inverted, or blue in standard Turbo)
-    # Using standard Turbo: 0 = dark blue (close), 255 = dark red (far),
-    # or invert so 0 = red (near), 255 = blue (far).
-    # In robotics, warm colors (red/orange) = near, cool colors (blue/cyan) = far is conventional.
     clipped = np.clip(depth[valid], min_depth, max_depth)
-    ratio = (clipped - min_depth) / (max_depth - min_depth)
+    ratio = (clipped - min_depth) / max(1e-4, max_depth - min_depth)
     scaled_uint8 = np.clip(ratio * 255.0, 0, 255).astype(np.uint8)
 
     colored = cv2.applyColorMap(scaled_uint8, colormap)
@@ -83,8 +101,8 @@ def colorize_depth(
 
 def attach_depth_legend(
     depth_vis: np.ndarray,
-    min_depth: float = 0.4,
-    max_depth: float = 4.0,
+    min_depth: float = 0.3,
+    max_depth: float = 15.0,
     legend_width: int = 80,
     colormap: int = cv2.COLORMAP_TURBO,
 ) -> np.ndarray:

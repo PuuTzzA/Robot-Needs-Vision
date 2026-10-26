@@ -264,11 +264,13 @@ class StereoPipeline:
         hitnet_model_path: str | Path | None = None,
         gpu_ids: list[int] | None = None,
         min_depth: float = 0.3,
-        max_depth: float = 5.0,
+        max_depth: float = 15.0,
+        resilient_voids: bool = True,
     ) -> None:
         self.calib = calibration
         self.min_depth = min_depth
         self.max_depth = max_depth
+        self.resilient_voids = resilient_voids
         self.lock = threading.Lock()
         self.gpu_ids = gpu_ids if gpu_ids is not None and len(gpu_ids) > 0 else [0]
         self.is_multigpu = len(self.gpu_ids) > 1
@@ -314,8 +316,22 @@ class StereoPipeline:
         self.latest_left_rect: np.ndarray | None = None
         self.latest_disparity: np.ndarray | None = None
         self.latest_depth_m: np.ndarray | None = None
-        self.latest_composite_jpeg: bytes | None = None
-        self.preview_dims: tuple[int, int] = (1440, 360)  # total width, height
+
+        # Create initial standby placeholder so video feed renders immediately on connection
+        placeholder = np.full((270, 1510, 3), 24, dtype=np.uint8)
+        cv2.putText(
+            placeholder,
+            "Stage 1 Stereo Vision - Standby (Waiting for camera feed / sender)",
+            (320, 142),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.72,
+            (56, 189, 248),
+            2,
+            cv2.LINE_AA,
+        )
+        _, p_buf = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        self.latest_composite_jpeg: bytes | None = p_buf.tobytes()
+        self.preview_dims: tuple[int, int] = (1510, 270)  # total width, height
 
         # Metrics & Latency breakdown
         self.fps: float = 0.0
@@ -336,6 +352,22 @@ class StereoPipeline:
         self.target_std_m: float = float("nan")
         self.target_valid_ratio: float = 0.0
         self._incoming_network_pair: tuple[np.ndarray, np.ndarray] | None = None
+
+    def set_depth_bounds(
+        self,
+        min_depth: float | None = None,
+        max_depth: float | None = None,
+        resilient_voids: bool | None = None,
+    ) -> tuple[float, float, bool]:
+        """Dynamically update depth bounds and far-field resilience."""
+        with self.lock:
+            if min_depth is not None and min_depth > 0:
+                self.min_depth = float(min_depth)
+            if max_depth is not None and max_depth > self.min_depth:
+                self.max_depth = float(max_depth)
+            if resilient_voids is not None:
+                self.resilient_voids = bool(resilient_voids)
+            return self.min_depth, self.max_depth, self.resilient_voids
 
     def _result_collector_loop(self) -> None:
         """Continuously collects completed inference results from the multi-GPU pool."""
@@ -541,12 +573,18 @@ class StereoPipeline:
         """Executes metric depth conversion, reticle sampling, HUD rendering, and state update."""
         t2 = time.perf_counter()
         focal_px = self.calib.get_focal_length(left_rect.shape[1], left_rect.shape[0])
+        with self.lock:
+            cur_min_depth = self.min_depth
+            cur_max_depth = self.max_depth
+            cur_resilient = self.resilient_voids
+
         depth_m = disparity_to_depth(
             disparity=disparity,
             focal_length_px=focal_px,
             baseline_m=self.calib.baseline_m,
-            min_depth=self.min_depth,
-            max_depth=self.max_depth,
+            min_depth=cur_min_depth,
+            max_depth=cur_max_depth,
+            resilient_voids=cur_resilient,
         )
 
         # Compactness calculation
@@ -573,7 +611,7 @@ class StereoPipeline:
         left_vis = cv2.resize(left_rect, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
         disp_colored = colorize_disparity(disparity)
         disp_vis = cv2.resize(disp_colored, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
-        depth_colored = colorize_depth(depth_m, self.min_depth, self.max_depth)
+        depth_colored = colorize_depth(depth_m, cur_min_depth, cur_max_depth)
         depth_vis = cv2.resize(depth_colored, (target_panel_w, target_panel_h), interpolation=cv2.INTER_LINEAR)
 
         # Draw target reticle
@@ -595,8 +633,8 @@ class StereoPipeline:
 
         depth_with_legend = attach_depth_legend(
             depth_vis,
-            min_depth=self.min_depth,
-            max_depth=self.max_depth,
+            min_depth=cur_min_depth,
+            max_depth=cur_max_depth,
             legend_width=70,
         )
 
@@ -613,7 +651,10 @@ class StereoPipeline:
         now = time.perf_counter()
         if self._last_completed_t > 0:
             instant_fps = 1.0 / max(1e-4, now - self._last_completed_t)
-            self.fps = 0.85 * self.fps + 0.15 * instant_fps if self.fps > 0 else instant_fps
+            if self.fps <= 0:
+                self.fps = instant_fps
+            else:
+                self.fps = 0.80 * self.fps + 0.20 * instant_fps
         else:
             self.fps = 1.0 / max(1e-4, time.perf_counter() - submit_t)
         self._last_completed_t = now
@@ -742,6 +783,9 @@ class WebServerHandler(BaseHTTPRequestHandler):
                     "target_x": self.pipeline.target_x,
                     "target_y": self.pipeline.target_y,
                     "gpus": self.pipeline.gpu_ids,
+                    "min_depth": self.pipeline.min_depth,
+                    "max_depth": self.pipeline.max_depth,
+                    "resilient_voids": self.pipeline.resilient_voids,
                 }
             self._send_json(data)
         else:
@@ -771,6 +815,21 @@ class WebServerHandler(BaseHTTPRequestHandler):
             y = int(query.get("y", [540])[0])
             self.pipeline.set_target_roi(x, y)
             self._send_json({"success": True, "target_x": x, "target_y": y})
+
+        elif path == "/api/set_depth_range":
+            query = parse_qs(parsed.query)
+            min_val = float(query.get("min", [self.pipeline.min_depth])[0]) if "min" in query else None
+            max_val = float(query.get("max", [self.pipeline.max_depth])[0]) if "max" in query else None
+            resilient_val = None
+            if "resilient" in query:
+                resilient_val = query.get("resilient", ["1"])[0].lower() in ("1", "true", "yes")
+            c_min, c_max, c_res = self.pipeline.set_depth_bounds(min_val, max_val, resilient_val)
+            self._send_json({
+                "success": True,
+                "min_depth": c_min,
+                "max_depth": c_max,
+                "resilient_voids": c_res,
+            })
 
         elif path == "/api/push_frame":
             t_recv_start = time.perf_counter()
@@ -803,6 +862,8 @@ class WebServerHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.wfile.write(body)
 
@@ -830,6 +891,24 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="0",
         help="GPU device ID(s) to distribute inference across (e.g. '0', '0,1,2,3', or '4' for 4 GPUs). Default: 0.",
+    )
+    parser.add_argument(
+        "--min-depth",
+        type=float,
+        default=0.3,
+        help="Minimum reliable metric depth in metres (default: 0.3).",
+    )
+    parser.add_argument(
+        "--max-depth",
+        type=float,
+        default=15.0,
+        help="Maximum reliable metric depth in metres (default: 15.0).",
+    )
+    parser.add_argument(
+        "--resilient-voids",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable far-field void resilience (clamping small/negative disparities to max_depth) default: True.",
     )
     parser.add_argument(
         "--calibration",
@@ -889,6 +968,7 @@ def main() -> None:
     print("  STAGE 1 STEREO VISION HARNESS")
     print(f"  Source: {args.source.upper()} | Initial Estimator: {args.estimator.upper()}")
     print(f"  GPU Worker Devices: {gpu_ids} ({'Multi-GPU Parallel' if len(gpu_ids) > 1 else 'Single-GPU Sequential'})")
+    print(f"  Depth Range: [{args.min_depth}m - {args.max_depth}m] | Void Resilience: {args.resilient_voids}")
     print("=" * 70)
 
     # 1. Load calibration & epipolar rectification maps
@@ -904,6 +984,9 @@ def main() -> None:
         model_path=str(args.model),
         hitnet_model_path=args.hitnet_model,
         gpu_ids=gpu_ids,
+        min_depth=args.min_depth,
+        max_depth=args.max_depth,
+        resilient_voids=args.resilient_voids,
     )
 
     # 3. Start Web Server in background thread

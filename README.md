@@ -61,11 +61,15 @@ Robot-Needs-Vision/
 
 For Stage 1 perception (real-time epipolar rectification, modular depth estimators, interactive web dashboard, and live measuring-tape accuracy HUD), see **[Stage1/README.md](file:///data/thomas/Robot-Needs-Vision/Stage1/README.md)**.
 
-Quick run on GPU server:
+Quick run on GPU server (Single or Multi-GPU):
 ```bash
-./Stage1/run_harness.sh --source network --web-port 8080
+# Single GPU
+./Stage1/run_harness.sh --source network --gpus 0 --web-port 8080
+
+# Multi-GPU Parallel Pipelining (distributes frames across multiple GPUs)
+./Stage1/run_harness.sh --source network --gpus 0,1,2,3 --web-port 8080
 ```
-Stream from laptop:
+Stream from laptop (HTTP push directly to forwarded port 8080):
 ```powershell
 python Stage1/laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --stream-scale 0.5
 ```

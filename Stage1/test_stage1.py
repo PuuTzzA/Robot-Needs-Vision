@@ -169,6 +169,45 @@ def test_hitnet() -> None:
     print(f"✓ HITNet disparity computed successfully.")
 
 
+def test_far_field_void_resilience() -> None:
+    print("\n--- [Test 6] Testing Far-Field Void Resilience ---")
+    h, w = 100, 100
+    fx = 3800.0
+    baseline_m = 0.0598
+    max_depth = 15.0
+    min_depth = 0.3
+
+    # Create disparity map with far objects and residual noise
+    # Some pixels at 20m, 50m, 100m, and residual slightly negative disparity (-0.2px)
+    disp = np.full((h, w), 25.0, dtype=np.float32)  # ~9.0m depth
+    disp[:30, :] = 10.0   # ~22.7m (beyond 15m)
+    disp[30:50, :] = 2.0  # ~113m (far background)
+    disp[50:60, :] = -0.2 # residual epipolar noise at optical infinity
+
+    # 1. With resilient_voids=True
+    depth_resilient = disparity_to_depth(
+        disp, fx, baseline_m, min_depth=min_depth, max_depth=max_depth, resilient_voids=True
+    )
+    assert not np.isnan(depth_resilient).any(), "Resilient mode should have zero NaN voids for far field!"
+    assert np.all(depth_resilient <= max_depth), f"Depth should be capped at max_depth ({max_depth}m)"
+    comp_resilient = calculate_compactness(depth_resilient)
+    assert np.isclose(comp_resilient, 100.0), f"Expected 100% compactness, got {comp_resilient}%"
+
+    # Colorization check: Far regions should NOT be black (0,0,0)
+    depth_vis = colorize_depth(depth_resilient, min_depth=min_depth, max_depth=max_depth)
+    assert not np.all(depth_vis[:30, :] == 0), "Far regions should be colorized, not black voids!"
+    print(f"✓ Resilient far-field depth: 100% solid, {comp_resilient:.1f}% compactness, non-black visualization.")
+
+    # 2. Without resilient_voids (strict thresholding)
+    depth_strict = disparity_to_depth(
+        disp, fx, baseline_m, min_depth=min_depth, max_depth=max_depth, resilient_voids=False
+    )
+    assert np.isnan(depth_strict[:60, :]).any(), "Strict mode should mask out depths beyond max_depth as NaN."
+    comp_strict = calculate_compactness(depth_strict)
+    assert comp_strict < 60.0, f"Strict mode should have reduced compactness, got {comp_strict}%"
+    print(f"✓ Strict mode verified: drops to {comp_strict:.1f}% compactness due to artificial cutoffs.")
+
+
 if __name__ == "__main__":
     print("==================================================")
     print("       STAGE 1 STEREO VISION TEST SUITE           ")
@@ -178,6 +217,7 @@ if __name__ == "__main__":
     test_depth_conversion_and_legend()
     test_deep_crestereo()
     test_hitnet()
+    test_far_field_void_resilience()
     print("\n==================================================")
     print("       ALL STAGE 1 TESTS PASSED SUCCESSFULLY!     ")
     print("==================================================")

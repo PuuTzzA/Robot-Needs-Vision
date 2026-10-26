@@ -256,7 +256,13 @@
       <button id="btn-crestereo" class="btn active" onclick="switchEstimator('crestereo')">CREStereo (Deep DL)</button>
       <button id="btn-hitnet" class="btn" onclick="switchEstimator('hitnet')">HITNet (Fast DL)</button>
       <button id="btn-sgbm" class="btn" onclick="switchEstimator('sgbm')">StereoSGBM (Traditional)</button>
-      <button id="btn-swap-cam" class="btn" onclick="toggleSwapCameras()">🔄 Swap Cameras (L ↔ R)</button>
+      <button id="btn-swap-cam" class="btn" onclick="toggleSwapCameras()">🔄 Swap Cameras</button>
+      <div style="display: flex; align-items: center; gap: 6px; margin-left: 6px; border-left: 1px solid var(--border); padding-left: 8px;">
+        <label for="depth-range-max" style="font-size: 0.8rem; color: var(--text-muted);">Max Depth:</label>
+        <input type="number" id="depth-range-max" min="2" max="30" step="0.5" value="15.0" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 4px; width: 65px; font-size: 0.85rem;" onchange="updateDepthConfig()" />
+        <span style="font-size: 0.8rem; color: var(--text-muted);">m</span>
+        <button id="btn-void-resilience" class="btn active" onclick="toggleVoidResilience()" title="Toggle far-field void resilience (preserves background instead of turning into voids)">🛡️ Far Fill: ON</button>
+      </div>
     </div>
   </header>
 
@@ -352,13 +358,18 @@
     let targetX = 960;
     let targetY = 540;
     let measuredZ = NaN;
+    let currentMaxDepth = 15.0;
+    let resilientVoids = true;
 
     const streamImg = document.getElementById('stream-img');
     const tooltip = document.getElementById('tooltip');
     const videoWrapper = document.getElementById('video-wrapper');
 
-    // Handle mouse hover for instant depth query
-    streamImg.addEventListener('mousemove', async (e) => {
+    let depthAbortCtrl = null;
+    let lastDepthQuery = 0;
+
+    // Handle mouse hover for instant depth query with throttling and aborting
+    streamImg.addEventListener('mousemove', (e) => {
       const rect = streamImg.getBoundingClientRect();
       const scaleX = streamImg.naturalWidth / rect.width;
       const scaleY = streamImg.naturalHeight / rect.height;
@@ -370,21 +381,42 @@
       tooltip.style.left = (e.clientX - rect.left) + 'px';
       tooltip.style.top = (e.clientY - rect.top) + 'px';
 
-      try {
-        const res = await fetch(`/api/depth_at?x=${px}&y=${py}`);
-        const data = await res.json();
-        if (data.valid) {
-          tooltip.innerHTML = `Depth: <b>${data.depth_m.toFixed(2)} m</b> (${(data.depth_m * 100).toFixed(1)} cm)<br><span style="font-size:0.7rem;color:#94a3b8">(${px}, ${py})</span>`;
-        } else {
-          tooltip.innerHTML = `Depth: <i>Void / Hole</i><br><span style="font-size:0.7rem;color:#94a3b8">(${px}, ${py})</span>`;
-        }
-      } catch (err) {
-        tooltip.innerHTML = `(${px}, ${py})`;
+      const now = performance.now();
+      if (now - lastDepthQuery < 65) {
+        return; // Throttle to max ~15 Hz to protect connection pool
       }
+      lastDepthQuery = now;
+
+      if (depthAbortCtrl) {
+        depthAbortCtrl.abort();
+      }
+      depthAbortCtrl = new AbortController();
+
+      fetch(`/api/depth_at?x=${px}&y=${py}`, { signal: depthAbortCtrl.signal, cache: 'no-store' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.valid) {
+            const isFarHorizon = data.depth_m >= (currentMaxDepth - 0.15);
+            const depthDisplay = isFarHorizon
+              ? `&gt; ${data.depth_m.toFixed(1)} m (Far Horizon)`
+              : `${data.depth_m.toFixed(2)} m (${(data.depth_m * 100).toFixed(1)} cm)`;
+            tooltip.innerHTML = `Depth: <b>${depthDisplay}</b><br><span style="font-size:0.7rem;color:#94a3b8">(${px}, ${py})</span>`;
+          } else {
+            tooltip.innerHTML = `Depth: <i>Void / Hole</i><br><span style="font-size:0.7rem;color:#94a3b8">(${px}, ${py})</span>`;
+          }
+        })
+        .catch(err => {
+          if (err.name !== 'AbortError') {
+            tooltip.innerHTML = `(${px}, ${py})`;
+          }
+        });
     });
 
     streamImg.addEventListener('mouseleave', () => {
       tooltip.style.display = 'none';
+      if (depthAbortCtrl) {
+        depthAbortCtrl.abort();
+      }
     });
 
     // Handle click to set target measurement ROI
@@ -424,10 +456,36 @@
       if (!btn) return;
       if (swapped) {
         btn.classList.add('warning-active');
-        btn.innerText = '⚠️ Cameras Swapped (R ↔ L)';
+        btn.innerText = '⚠️ Cameras Swapped';
       } else {
         btn.classList.remove('warning-active');
-        btn.innerText = '🔄 Swap Cameras (L ↔ R)';
+        btn.innerText = '🔄 Swap Cameras';
+      }
+    }
+
+    async function updateDepthConfig() {
+      const maxInput = parseFloat(document.getElementById('depth-range-max').value);
+      if (!isNaN(maxInput) && maxInput > 1.0) {
+        currentMaxDepth = maxInput;
+        await fetch(`/api/set_depth_range?max=${currentMaxDepth}&resilient=${resilientVoids ? 1 : 0}`, { method: 'POST' });
+      }
+    }
+
+    async function toggleVoidResilience() {
+      resilientVoids = !resilientVoids;
+      updateVoidResilienceButtonUI(resilientVoids);
+      await fetch(`/api/set_depth_range?max=${currentMaxDepth}&resilient=${resilientVoids ? 1 : 0}`, { method: 'POST' });
+    }
+
+    function updateVoidResilienceButtonUI(active) {
+      const btn = document.getElementById('btn-void-resilience');
+      if (!btn) return;
+      if (active) {
+        btn.classList.add('active');
+        btn.innerText = '🛡️ Far Fill: ON';
+      } else {
+        btn.classList.remove('active');
+        btn.innerText = '🛡️ Far Fill: OFF';
       }
     }
 
@@ -455,16 +513,37 @@
       }
     }
 
-    // Poll live metrics periodically
+    // Poll live metrics sequentially without queue pileups
+    let isPollingMetrics = false;
     async function pollMetrics() {
+      if (isPollingMetrics) return;
+      isPollingMetrics = true;
+
       try {
-        const res = await fetch('/api/metrics');
+        const res = await fetch('/api/metrics', { cache: 'no-store' });
         const data = await res.json();
 
-        const totalMs = data.total_ms || (1000.0 / Math.max(0.1, data.fps));
-        document.getElementById('metric-fps').innerText = `${data.fps.toFixed(1)} FPS`;
-        const gpuInfo = (data.gpus && data.gpus.length > 1) ? ` [${data.gpus.length} GPUs: ${data.gpus.join(',')}]` : '';
-        document.getElementById('metric-latency').innerText = `Total: ${totalMs.toFixed(1)} ms | ${data.estimator}${gpuInfo}`;
+        if (data.max_depth) {
+          currentMaxDepth = data.max_depth;
+          const maxInput = document.getElementById('depth-range-max');
+          if (maxInput && document.activeElement !== maxInput) {
+            maxInput.value = data.max_depth.toFixed(1);
+          }
+        }
+        if (typeof data.resilient_voids === 'boolean') {
+          resilientVoids = data.resilient_voids;
+          updateVoidResilienceButtonUI(resilientVoids);
+        }
+
+        if (data.fps > 0) {
+          const totalMs = data.total_ms > 0 ? data.total_ms : (1000.0 / Math.max(0.1, data.fps));
+          document.getElementById('metric-fps').innerText = `${data.fps.toFixed(1)} FPS`;
+          const gpuInfo = (data.gpus && data.gpus.length > 1) ? ` [${data.gpus.length} GPUs: ${data.gpus.join(',')}]` : '';
+          document.getElementById('metric-latency').innerText = `Total: ${totalMs.toFixed(1)} ms | ${data.estimator}${gpuInfo}`;
+        } else {
+          document.getElementById('metric-fps').innerText = `-- FPS`;
+          document.getElementById('metric-latency').innerText = `Waiting for camera stream... | ${data.estimator}`;
+        }
 
         if (data.estimator_key) {
           ['crestereo', 'hitnet', 'sgbm'].forEach(id => {
@@ -501,11 +580,15 @@
           document.getElementById('target-measured').innerText = 'No valid depth at ROI';
         }
       } catch (err) {
-        // Network lag or frame drop
+        // Network glitch or connection reset
+      } finally {
+        isPollingMetrics = false;
+        setTimeout(pollMetrics, 200);
       }
     }
 
-    setInterval(pollMetrics, 250);
+    // Call immediately on page load so metrics show instantly!
+    pollMetrics();
   </script>
 </body>
 </html>

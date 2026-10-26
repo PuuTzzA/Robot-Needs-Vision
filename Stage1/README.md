@@ -20,18 +20,19 @@ This guide provides step-by-step instructions to run the binocular perception pi
  │    laptop_camera_sender.py                               │  Depth Feed)  │
  │    (Synchronized grab + JPEG)                            │               │
  └──────────────┬───────────────────────────────────────────┴───────────────┘
-                │ Port 5555 (Video Stream)                  │ Port 8080
+                │ Port 8080 (HTTP /api/push_frame)          │ Port 8080
 ════════════════╪═══════════════════════════════════════════╪═════════════════
                 ▼                                           │
  ┌──────────────────────────────────────────────────────────┴───────────────┐
  │                       REMOTE GPU SERVER (SSH)                            │
  │                                                                          │
  │   harness.py                                                             │
- │   ├── 1. Receives video stream from laptop on port 5555                  │
- │   ├── 2. Undistorts & Rectifies epipolar scanlines (YAML calibration)     │
- │   ├── 3. Computes disparity (CREStereo ONNX / Traditional StereoSGBM)    │
- │   ├── 4. Calculates absolute metric depth Z = (fx * B) / d               │
- │   └── 5. Serves interactive Web Dashboard on port 8080                   │
+ │   ├── 1. Receives video stream from laptop on port 8080 (/api/push_frame)│
+ │   ├── 2. Undistorts & Rectifies epipolar scanlines (YAML calibration)    │
+ │   ├── 3. Computes disparity (CREStereo ONNX / HITNet / StereoSGBM)       │
+ │   ├── 4. Pipelined inference across GPUs (--gpus 0,1,2,3)                │
+ │   ├── 5. Metric depth Z = (fx * B) / d with Far-Field Void Resilience    │
+ │   └── 6. Serves interactive Web Dashboard & APIs on port 8080            │
  └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -104,43 +105,56 @@ Hover your mouse over the depth view to see instant millimeter/centimeter depth 
 
 ---
 
-## Method 2: Running with Standard Terminal SSH (Command Line)
-
-If you connect via terminal SSH instead of VS Code, you can forward both ports with a single SSH command:
-
-### Step 1: Connect via SSH with Dual Port Forwarding
-On your **local laptop terminal**, connect to the server with `-L 8080:localhost:8080` (for Web UI) and `-R 5555:localhost:5555` (for camera video):
-```bash
-ssh -L 8080:localhost:8080 -R 5555:localhost:5555 user@server_ip
-```
-
-### Step 2: Start the Pipeline on the Server
-In the SSH session:
-```bash
-cd /data/thomas/Robot-Needs-Vision
-.venv/bin/python Stage1/harness.py --source network --web-port 8080 --stream-port 5555
-```
-
-### Step 3: Run the Camera Sender on Your Laptop
-In a new terminal window on your **local laptop**:
-```bash
-python laptop_camera_sender.py --server 127.0.0.1 --port 5555 --left-cam 0 --right-cam 1
-```
-
-### Step 4: Open Browser
-Open **`http://localhost:8080`** on your laptop.
-
----
-
-## Method 3: Offline / Mock Mode (Test Right Now Without Any Cameras)
+## Offline / Mock Mode (Test Without Physical Cameras)
 
 You can run and test the complete pipeline, UI, depth hover, and metrics right now on the server without plugging in any cameras:
 
 ```bash
 cd /data/thomas/Robot-Needs-Vision
-.venv/bin/python Stage1/harness.py --source mock --web-port 8080
+./Stage1/run_harness.sh --source mock --web-port 8080
 ```
-Then open `http://localhost:8080` in your browser. It continuously feeds the calibrated Middlebury stereo pair.
+Then open `http://localhost:8080` in your browser. It continuously feeds the calibrated Middlebury stereo test pair.
+
+---
+
+## Command-Line Parameter Reference
+
+### 1. Server Master Harness (`harness.py` / `run_harness.sh`)
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--source` | choice | `mock` | Frame source: `network` (streamed from laptop over HTTP or TCP), `mock` (bundled Middlebury stereo pair loop), or `webcam` (locally attached cameras). |
+| `--gpus` | string | `0` | GPU device ID(s) for inference pipelining. Examples: `0` (single GPU), `0,1,2,3` (parallel pipeline across 4 GPUs), or `4` (uses first 4 GPUs: 0, 1, 2, 3). In multi-GPU mode, frames are dispatched across GPUs in parallel, drastically reducing frame latency and boosting total throughput. |
+| `--estimator` | choice | `crestereo` | Initial active depth estimator: `crestereo` (Deep CREStereo ONNX), `hitnet` (Fast HITNet ONNX), or `sgbm` (Traditional OpenCV StereoSGBM). Can also be dynamically switched on the fly in the web dashboard. |
+| `--min-depth` | float | `0.3` | Minimum reliable metric depth in metres. Measurements closer than this threshold are filtered out. |
+| `--max-depth` | float | `15.0` | Maximum reliable metric depth in metres. Adjusts the colorization colormap and measurement horizon. Can be changed on the fly in the web dashboard. |
+| `--resilient-voids` / `--no-resilient-voids` | flag | `True` | Far-field void resilience. When enabled, distant background and near-zero or slightly negative disparities (from calibration residuals at optical infinity) are clamped to `max_depth` rather than discarded as voids/holes, keeping compactness at 100%. |
+| `--calibration` | path | `calibration/stereo_calibration_fixed.yml` | Path to OpenCV YAML stereo calibration matrix file containing intrinsic matrices ($K_1, K_2$), distortion coefficients ($D_1, D_2$), rotation ($R$), and translation ($T$). |
+| `--model` | path | `models/crestereo_embedded.onnx` | Path to the CREStereo ONNX model file. |
+| `--hitnet-model` | path | Auto-detect | Path to the HITNet ONNX model file (auto-detected in `models/hitnet.onnx` if present). |
+| `--web-port` | int | `8080` | HTTP port for the web dashboard, MJPEG live video stream (`/video_feed`), REST APIs, and HTTP frame receiver (`/api/push_frame`). |
+| `--stream-port` | int | `5555` | TCP port to listen for incoming stereo camera frames if streaming via the legacy TCP protocol (`--protocol tcp`). |
+| `--width` | int | `1920` | Native camera width in pixels. Used for calibration map precomputation and local webcam capture. |
+| `--height` | int | `1080` | Native camera height in pixels. Used for calibration map precomputation and local webcam capture. |
+| `--display` | flag | `False` | Also open a local native OpenCV window (`cv2.imshow`) if an X11 DISPLAY is available on the machine. |
+
+---
+
+### 2. Laptop Camera Sender (`laptop_camera_sender.py`)
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--protocol` | choice | `http` | Streaming protocol: `http` (recommended; pushes frames directly to port 8080 via HTTP POST `/api/push_frame`, requiring zero extra port forwarding in VS Code) or `tcp` (raw TCP socket streaming to port 5555). |
+| `--server` | string | `127.0.0.1` | Remote server IP address or hostname running `harness.py`. When using VS Code port forwarding, leave as `127.0.0.1`. |
+| `--port` | int | `8080` | Destination port on the server (`8080` for HTTP, `5555` for TCP). |
+| `--left-cam` | int | `0` | OpenCV device index for the left USB camera. |
+| `--right-cam` | int | `2` | OpenCV device index for the right USB camera. (On Windows, indices are commonly 0 and 2; on Linux/macOS, usually 0 and 1). |
+| `--stream-scale` | float | `0.5` | Spatial downscale factor before JPEG encoding and transmission (e.g., `0.5` sends $960 \times 540$ per eye, reducing bandwidth by $>6\times$ for smooth 25–30 FPS over SSH/VPN; `1.0` sends full 1080p). |
+| `--jpeg-quality` | int | `80` | JPEG compression quality (1–100). Value of 80 preserves stereo edges while keeping frame size under 50 KB. |
+| `--fps-limit` | float | `30.0` | Maximum capture FPS cap to throttle camera grabbing and USB bus saturation. |
+| `--width` | int | `1920` | Native hardware camera capture width in pixels. |
+| `--height` | int | `1080` | Native hardware camera capture height in pixels. |
+| `--timeout` | float | `10.0` | Network request and socket timeout in seconds. |
 
 ---
 
@@ -173,7 +187,7 @@ During the evaluation, Teaching Assistants (TAs) will measure ground-truth dista
 ### 4. Interactive Hover Depth Inspection
 - Move your cursor across the **Depth View**. A live tooltip follows your cursor displaying the exact depth:
   `Depth: 1.48 m (148.2 cm) | (x: 1042, y: 530)`
-- Show the TAs the attached **Vertical Metric Depth Color Legend** displaying distances from $0.5\text{ m}$ to $5.0\text{ m}$.
+- Show the TAs the attached **Vertical Metric Depth Color Legend** displaying distances from $0.3\text{ m}$ to $15.0\text{ m}$ (dynamically adjustable in the UI).
 
 ---
 
@@ -182,8 +196,8 @@ During the evaluation, Teaching Assistants (TAs) will measure ground-truth dista
 | Problem | Cause | Solution |
 | :--- | :--- | :--- |
 | **"Could not open camera device"** on laptop | Wrong camera index | Try `--left-cam 1 --right-cam 2` or check camera permissions in your OS settings. |
-| **Left and Right views look inverted** | Camera indices swapped | Swap `--left-cam` and `--right-cam` arguments when running `laptop_camera_sender.py`. |
-| **"Connection refused" on laptop** | Server harness is not running or port 5555 is blocked | Make sure `harness.py` is started on the server *before* running `laptop_camera_sender.py`, and ensure port 5555 is forwarded. |
+| **Left and Right views look inverted** | Camera indices swapped | Swap `--left-cam` and `--right-cam` arguments when running `laptop_camera_sender.py`. (Or click **🔄 Swap Cameras** in the web dashboard). |
+| **"Connection refused" on laptop** | Server harness is not running or port 8080 is blocked | Make sure `harness.py` is started on the server *before* running `laptop_camera_sender.py`, and ensure port 8080 is forwarded in VS Code. |
 | **Web page cannot connect to 8080** | Port 8080 not forwarded | In VS Code, check the **Ports** tab and ensure port 8080 is listed as Forwarded. In terminal SSH, use `-L 8080:localhost:8080`. |
 | **"libcudnn.so.9: cannot open shared object file"** / **Falls back to CPUExecutionProvider** | cuDNN 9 path not set in environment | Run via `./Stage1/run_harness.sh` or make sure `source .venv/bin/activate` was executed so `LD_LIBRARY_PATH` points to `.venv/.../nvidia/cudnn/lib`. |
 | **Client HTTP timeout / Low FPS (3–5 FPS)** | Sending unscaled 1080p over SSH/VPN tunnel saturates network bandwidth | Use `--stream-scale 0.5` in `laptop_camera_sender.py` (downsamples transmission from 287 KB to 45 KB per frame, boosting throughput to 25–30 FPS). |
