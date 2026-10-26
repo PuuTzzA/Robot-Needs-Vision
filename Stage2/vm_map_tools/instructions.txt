@@ -1,0 +1,29 @@
+Compact package: Final map + waypoint navigation program
+For Ubuntu VM with ROS 2 Humble, TurtleBot 4 navigation/viz, and Nav2 installed.
+Place the entire vm-map-tools folder into your home directory. In each terminal, first run:
+source /opt/ros/humble/setup.bash
+
+Exit old SLAM, and run in three separate terminals:
+ros2 launch turtlebot4_navigation localization.launch.py map:=$HOME/vm-map-tools/maps/final_room.yaml
+ros2 launch turtlebot4_navigation nav2.launch.py
+ros2 launch turtlebot4_viz view_robot.launch.py
+
+Confirm that the VM can receive the robot's /scan, /odom, and TF.
+Set RViz Fixed Frame to map, and use 2D Pose Estimate to specify the actual position and orientation.
+Confirm that the laser scan aligns with the map walls before performing short-distance navigation tests.
+
+Run the waypoint program in a new terminal:
+python3 ~/vm-map-tools/go_points.py --map ~/vm-map-tools/maps/final_room.yaml --points ~/vm-map-tools/maps/final_room_points.json
+
+Arrow waypoint selection: RViz top toolbar '+' -> Add rviz_default_plugins/SetGoal.
+In Panels -> Tool Properties, change the new tool's Topic to /waypoint_pose before use.
+Do NOT use Nav2 Goal or the default /goal_pose for marking points, as they may trigger navigation immediately.
+Click and hold at the parking location, drag the arrow towards the exhibit, and once the terminal receives the pose, enter:
+SAVE A
+To re-select an existing point, use UPDATE A; LIST to view; GO A to navigate; CANCEL to cancel.
+Each save requires re-selecting a point. The points file will be created automatically upon the first save.
+You can also use Publish Point to select a location, then enter SAVE A 90 to set the heading manually.
+Angle is based on map coordinates: +X=0°, +Y=90°.
+
+This package does not contain old waypoints, initial poses, APIs, camera capture, stereo models, or installers.
+Changing computers does not require rebuilding the map, but localization must be re-initialized.

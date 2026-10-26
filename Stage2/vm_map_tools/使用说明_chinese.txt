@@ -1,0 +1,29 @@
+精简包：最终地图 + 点位导航程序
+适用于已安装 ROS 2 Humble、TurtleBot4 navigation/viz 和 Nav2 的 Ubuntu VM。
+将 vm-map-tools 整个文件夹放入主目录。每个终端先执行：
+source /opt/ros/humble/setup.bash
+
+退出旧 SLAM，分别在三个终端运行：
+ros2 launch turtlebot4_navigation localization.launch.py map:=$HOME/vm-map-tools/maps/final_room.yaml
+ros2 launch turtlebot4_navigation nav2.launch.py
+ros2 launch turtlebot4_viz view_robot.launch.py
+
+确认 VM 能收到机器人的 /scan、/odom 和 TF。
+RViz Fixed Frame 设为 map，用 2D Pose Estimate 指定实际位置和朝向。
+确认激光与地图墙壁对齐，再做短距离导航测试。
+
+新终端运行点位程序：
+python3 ~/vm-map-tools/go_points.py --map ~/vm-map-tools/maps/final_room.yaml --points ~/vm-map-tools/maps/final_room_points.json
+
+箭头选点：RViz 顶部 + 添加 rviz_default_plugins/SetGoal。
+Panels → Tool Properties 中，将新工具 Topic 改为 /waypoint_pose 后再使用。
+不要用 Nav2 Goal 或默认 /goal_pose 标点，它们可能直接启动导航。
+在停车位置按住鼠标，向展品方向拖箭头，终端收到位姿后输入：
+SAVE A
+已有点重新选择后用 UPDATE A；LIST 查看；GO A 导航；CANCEL 取消。
+每次保存前需重新选点。点位文件首次保存时自动创建。
+也可用 Publish Point 选位置，再输入 SAVE A 90 手动设朝向。
+角度基于地图 +X=0°、+Y=90°。
+
+本包不含旧点位、初始位姿、API、拍照、双目模型或安装器。
+换电脑不需重建地图，但需要重新初始化定位。

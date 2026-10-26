@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stage 1 Stereo Vision Dashboard | Robot Needs Vision</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --green: #22c55e;
+      --yellow: #eab308;
+      --red: #ef4444;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header-title h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header-title h1 span.badge {
+      font-size: 0.75rem;
+      background: #0284c7;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-weight: 600;
+    }
+    .header-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      background: var(--border);
+      color: var(--text);
+      border: 1px solid transparent;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    .btn:hover {
+      background: #475569;
+    }
+    .btn.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #fff;
+    }
+    .btn.warning-active {
+      background: #b45309;
+      border-color: #f59e0b;
+      color: #fff;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--green);
+      margin-right: 6px;
+    }
+    main {
+      flex: 1;
+      padding: 16px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .video-container {
+      position: relative;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      user-select: none;
+    }
+    #stream-img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      cursor: crosshair;
+    }
+    .hover-tooltip {
+      position: absolute;
+      display: none;
+      pointer-events: none;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid var(--accent);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+      z-index: 100;
+      transform: translate(12px, 12px);
+      white-space: nowrap;
+    }
+    .panel-labels {
+      display: flex;
+      justify-content: space-around;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .panel-labels div {
+      flex: 1;
+      text-align: center;
+    }
+    .panel-labels div.active-panel {
+      color: var(--accent);
+    }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .card-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .card-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .card-value.highlight {
+      color: var(--accent);
+    }
+    .card-value.good {
+      color: var(--green);
+    }
+    .card-value.warning {
+      color: var(--yellow);
+    }
+    .card-desc {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .tape-tool {
+      background: #1e293b;
+      border: 1px solid #3b82f6;
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 20px;
+    }
+    .tape-tool h3 {
+      font-size: 0.95rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent);
+    }
+    .tape-input-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tape-input-group label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .tape-input-group input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 4px;
+      width: 100px;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+    .error-pill {
+      font-size: 0.9rem;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(34, 197, 94, 0.2);
+      color: var(--green);
+      border: 1px solid var(--green);
+    }
+    .error-pill.bad {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--red);
+      border-color: var(--red);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-title">
+      <h1><span class="status-dot"></span> Stage 1 Stereo Vision <span class="badge">40% Grade</span></h1>
+      <div class="header-subtitle">Live Epipolar Rectification, Metric Depth Estimation &amp; Tape Measure Benchmarking</div>
+    </div>
+    <div class="controls">
+      <span style="font-size: 0.85rem; color: var(--text-muted); margin-right: 4px;">Estimator:</span>
+      <button id="btn-crestereo" class="btn active" onclick="switchEstimator('crestereo')">CREStereo (Deep DL)</button>
+      <button id="btn-hitnet" class="btn" onclick="switchEstimator('hitnet')">HITNet (Fast DL)</button>
+      <button id="btn-sgbm" class="btn" onclick="switchEstimator('sgbm')">StereoSGBM (Traditional)</button>
+      <button id="btn-swap-cam" class="btn" onclick="toggleSwapCameras()">🔄 Swap Cameras</button>
+      <div style="display: flex; align-items: center; gap: 6px; margin-left: 6px; border-left: 1px solid var(--border); padding-left: 8px;">
+        <label for="depth-range-max" style="font-size: 0.8rem; color: var(--text-muted);">Max Depth:</label>
+        <input type="number" id="depth-range-max" min="2" max="30" step="0.5" value="15.0" style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 4px; width: 65px; font-size: 0.85rem;" onchange="updateDepthConfig()" />
+        <span style="font-size: 0.8rem; color: var(--text-muted);">m</span>
+        <button id="btn-void-resilience" class="btn active" onclick="toggleVoidResilience()" title="Toggle far-field void resilience (preserves background instead of turning into voids)">🛡️ Far Fill: ON</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="panel-labels">
+      <div>[1] Rectified Left Feed</div>
+      <div>[2] Disparity Map</div>
+      <div class="active-panel">[3] Absolute Depth Map &amp; Legend (Hover for Depth)</div>
+    </div>
+
+    <div class="video-container" id="video-wrapper">
+      <img id="stream-img" src="/video_feed" alt="Stereo Live Stream" />
+      <div id="tooltip" class="hover-tooltip">Depth: -- m</div>
+    </div>
+
+    <!-- TA Measuring Tape HUD -->
+    <div class="tape-tool">
+      <div>
+        <h3>📏 TA Measuring Tape Verification Tool</h3>
+        <span class="card-desc">Click any object in the video stream to lock a target ROI patch.</span>
+      </div>
+      <div class="tape-input-group">
+        <label for="tape-distance">Tape Distance:</label>
+        <input type="number" id="tape-distance" step="0.01" value="1.50" oninput="updateTapeError()" />
+        <span style="font-size: 0.85rem; color: var(--text-muted);">metres</span>
+      </div>
+      <div>
+        <span class="card-desc">Measured Pred:</span>
+        <div id="target-measured" style="font-size: 1.25rem; font-weight: 700; color: var(--accent);">-- m</div>
+      </div>
+      <div id="error-badge-container">
+        <span class="error-pill" id="error-badge">Error: -- cm</span>
+      </div>
+    </div>
+
+    <!-- Live Performance Cards -->
+    <div class="metrics-grid">
+      <div class="card">
+        <div class="card-title">Accuracy (5%)</div>
+        <div class="card-value good" id="metric-accuracy">-- cm</div>
+        <div class="card-desc" id="metric-accuracy-pct">Live difference vs Tape Measure</div>
+      </div>
+      <div class="card" style="grid-column: span 2;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline;">
+          <div class="card-title">Speed &amp; Latency Breakdown (5%)</div>
+          <span id="metric-latency-badge" style="font-size: 0.85rem; color: var(--accent); font-weight: 700;">-- ms/frame</span>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 2px;">
+          <div class="card-value highlight" id="metric-fps" style="font-size: 1.85rem;">-- FPS</div>
+          <div class="card-desc" id="metric-latency">Total: -- ms | Initializing...</div>
+        </div>
+
+        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border);">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px;">
+            <div style="background: rgba(15,23,42,0.6); padding: 6px 10px; border-radius: 6px; border-left: 3px solid #38bdf8;">
+              <div style="color: var(--text-muted); font-size: 0.7rem; font-weight: 700;">INFERENCE</div>
+              <div id="bd-infer" style="font-weight: 700; color: #fff; font-size: 0.95rem;">-- ms</div>
+            </div>
+            <div style="background: rgba(15,23,42,0.6); padding: 6px 10px; border-radius: 6px; border-left: 3px solid #a855f7;">
+              <div style="color: var(--text-muted); font-size: 0.7rem; font-weight: 700;">RECTIFY</div>
+              <div id="bd-rectify" style="font-weight: 700; color: #fff; font-size: 0.95rem;">-- ms</div>
+            </div>
+            <div style="background: rgba(15,23,42,0.6); padding: 6px 10px; border-radius: 6px; border-left: 3px solid #10b981;">
+              <div style="color: var(--text-muted); font-size: 0.7rem; font-weight: 700;">METRIC DEPTH</div>
+              <div id="bd-depth" style="font-weight: 700; color: #fff; font-size: 0.95rem;">-- ms</div>
+            </div>
+            <div style="background: rgba(15,23,42,0.6); padding: 6px 10px; border-radius: 6px; border-left: 3px solid #f59e0b;">
+              <div style="color: var(--text-muted); font-size: 0.7rem; font-weight: 700;">VIS &amp; ENCODE</div>
+              <div id="bd-vis" style="font-weight: 700; color: #fff; font-size: 0.95rem;">-- ms</div>
+            </div>
+            <div style="background: rgba(15,23,42,0.6); padding: 6px 10px; border-radius: 6px; border-left: 3px solid #ec4899;">
+              <div style="color: var(--text-muted); font-size: 0.7rem; font-weight: 700;">NETWORK RECV</div>
+              <div id="bd-net" style="font-weight: 700; color: #fff; font-size: 0.95rem;">-- ms</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Compactness (5%)</div>
+        <div class="card-value good" id="metric-compactness">-- %</div>
+        <div class="card-desc" id="metric-compactness-desc">Fill rate (Absence of holes)</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Calibration Baseline</div>
+        <div class="card-value" id="metric-baseline">59.52 mm</div>
+        <div class="card-desc">Rectified fx: 3700.7 px</div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let currentEstimator = 'crestereo';
+    let targetX = 960;
+    let targetY = 540;
+    let measuredZ = NaN;
+    let currentMaxDepth = 15.0;
+    let resilientVoids = true;
+
+    const streamImg = document.getElementById('stream-img');
+    const tooltip = document.getElementById('tooltip');
+    const videoWrapper = document.getElementById('video-wrapper');
+
+    let depthAbortCtrl = null;
+    let lastDepthQuery = 0;
+
+    // Handle mouse hover for instant depth query with throttling and aborting
+    streamImg.addEventListener('mousemove', (e) => {
+      const rect = streamImg.getBoundingClientRect();
+      const scaleX = streamImg.naturalWidth / rect.width;
+      const scaleY = streamImg.naturalHeight / rect.height;
+
+      const px = Math.round((e.clientX - rect.left) * scaleX);
+      const py = Math.round((e.clientY - rect.top) * scaleY);
+
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX - rect.left) + 'px';
+      tooltip.style.top = (e.clientY - rect.top) + 'px';
+
+      const now = performance.now();
+      if (now - lastDepthQuery < 65) {
+        return; // Throttle to max ~15 Hz to protect connection pool
+      }
+      lastDepthQuery = now;
+
+      if (depthAbortCtrl) {
+        depthAbortCtrl.abort();
+      }
+      depthAbortCtrl = new AbortController();
+
+      fetch(`/api/depth_at?x=${px}&y=${py}`, { signal: depthAbortCtrl.signal, cache: 'no-store' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.valid) {
+            const isFarHorizon = data.depth_m >= (currentMaxDepth - 0.15);
+            const depthDisplay = isFarHorizon
+              ? `&gt; ${data.depth_m.toFixed(1)} m (Far Horizon)`
+              : `${data.depth_m.toFixed(2)} m (${(data.depth_m * 100).toFixed(1)} cm)`;
+            tooltip.innerHTML = `Depth: <b>${depthDisplay}</b><br><span style="font-size:0.7rem;color:#94a3b8">(${px}, ${py})</span>`;
+          } else {
+            tooltip.innerHTML = `Depth: <i>Void / Hole</i><br><span style="font-size:0.7rem;color:#94a3b8">(${px}, ${py})</span>`;
+          }
+        })
+        .catch(err => {
+          if (err.name !== 'AbortError') {
+            tooltip.innerHTML = `(${px}, ${py})`;
+          }
+        });
+    });
+
+    streamImg.addEventListener('mouseleave', () => {
+      tooltip.style.display = 'none';
+      if (depthAbortCtrl) {
+        depthAbortCtrl.abort();
+      }
+    });
+
+    // Handle click to set target measurement ROI
+    streamImg.addEventListener('click', async (e) => {
+      const rect = streamImg.getBoundingClientRect();
+      const scaleX = streamImg.naturalWidth / rect.width;
+      const scaleY = streamImg.naturalHeight / rect.height;
+
+      targetX = Math.round((e.clientX - rect.left) * scaleX);
+      targetY = Math.round((e.clientY - rect.top) * scaleY);
+
+      await fetch(`/api/set_target?x=${targetX}&y=${targetY}`, { method: 'POST' });
+    });
+
+    async function switchEstimator(name) {
+      ['crestereo', 'hitnet', 'sgbm'].forEach(id => {
+        const btn = document.getElementById(`btn-${id}`);
+        if (btn) btn.classList.toggle('active', id === name);
+      });
+
+      await fetch(`/api/switch_estimator?name=${name}`, { method: 'POST' });
+      currentEstimator = name;
+    }
+
+    async function toggleSwapCameras() {
+      try {
+        const res = await fetch('/api/swap_cameras', { method: 'POST' });
+        const data = await res.json();
+        updateSwapButtonUI(data.swap_cameras);
+      } catch (err) {
+        console.error('Failed to toggle camera swap', err);
+      }
+    }
+
+    function updateSwapButtonUI(swapped) {
+      const btn = document.getElementById('btn-swap-cam');
+      if (!btn) return;
+      if (swapped) {
+        btn.classList.add('warning-active');
+        btn.innerText = '⚠️ Cameras Swapped';
+      } else {
+        btn.classList.remove('warning-active');
+        btn.innerText = '🔄 Swap Cameras';
+      }
+    }
+
+    async function updateDepthConfig() {
+      const maxInput = parseFloat(document.getElementById('depth-range-max').value);
+      if (!isNaN(maxInput) && maxInput > 1.0) {
+        currentMaxDepth = maxInput;
+        await fetch(`/api/set_depth_range?max=${currentMaxDepth}&resilient=${resilientVoids ? 1 : 0}`, { method: 'POST' });
+      }
+    }
+
+    async function toggleVoidResilience() {
+      resilientVoids = !resilientVoids;
+      updateVoidResilienceButtonUI(resilientVoids);
+      await fetch(`/api/set_depth_range?max=${currentMaxDepth}&resilient=${resilientVoids ? 1 : 0}`, { method: 'POST' });
+    }
+
+    function updateVoidResilienceButtonUI(active) {
+      const btn = document.getElementById('btn-void-resilience');
+      if (!btn) return;
+      if (active) {
+        btn.classList.add('active');
+        btn.innerText = '🛡️ Far Fill: ON';
+      } else {
+        btn.classList.remove('active');
+        btn.innerText = '🛡️ Far Fill: OFF';
+      }
+    }
+
+    function updateTapeError() {
+      const tapeInput = parseFloat(document.getElementById('tape-distance').value);
+      const badge = document.getElementById('error-badge');
+      const metricAcc = document.getElementById('metric-accuracy');
+      const metricAccPct = document.getElementById('metric-accuracy-pct');
+
+      if (!isNaN(measuredZ) && measuredZ > 0 && !isNaN(tapeInput) && tapeInput > 0) {
+        const diffCm = Math.abs(measuredZ - tapeInput) * 100.0;
+        const pct = (diffCm / (tapeInput * 100.0)) * 100.0;
+
+        badge.innerText = `Error: ${diffCm.toFixed(1)} cm (${pct.toFixed(2)}%)`;
+        metricAcc.innerText = `± ${diffCm.toFixed(1)} cm`;
+        metricAccPct.innerText = `Percentage Error: ${pct.toFixed(2)}%`;
+
+        if (diffCm <= 3.0) {
+          badge.className = 'error-pill';
+          metricAcc.className = 'card-value good';
+        } else {
+          badge.className = 'error-pill bad';
+          metricAcc.className = 'card-value warning';
+        }
+      }
+    }
+
+    // Poll live metrics sequentially without queue pileups
+    let isPollingMetrics = false;
+    async function pollMetrics() {
+      if (isPollingMetrics) return;
+      isPollingMetrics = true;
+
+      try {
+        const res = await fetch('/api/metrics', { cache: 'no-store' });
+        const data = await res.json();
+
+        if (data.max_depth) {
+          currentMaxDepth = data.max_depth;
+          const maxInput = document.getElementById('depth-range-max');
+          if (maxInput && document.activeElement !== maxInput) {
+            maxInput.value = data.max_depth.toFixed(1);
+          }
+        }
+        if (typeof data.resilient_voids === 'boolean') {
+          resilientVoids = data.resilient_voids;
+          updateVoidResilienceButtonUI(resilientVoids);
+        }
+
+        if (data.fps > 0) {
+          const totalMs = data.total_ms > 0 ? data.total_ms : (1000.0 / Math.max(0.1, data.fps));
+          document.getElementById('metric-fps').innerText = `${data.fps.toFixed(1)} FPS`;
+          const gpuInfo = (data.gpus && data.gpus.length > 1) ? ` [${data.gpus.length} GPUs: ${data.gpus.join(',')}]` : '';
+          document.getElementById('metric-latency').innerText = `Total: ${totalMs.toFixed(1)} ms | ${data.estimator}${gpuInfo}`;
+        } else {
+          document.getElementById('metric-fps').innerText = `-- FPS`;
+          document.getElementById('metric-latency').innerText = `Waiting for camera stream... | ${data.estimator}`;
+        }
+
+        if (data.estimator_key) {
+          ['crestereo', 'hitnet', 'sgbm'].forEach(id => {
+            const btn = document.getElementById(`btn-${id}`);
+            if (btn) btn.classList.toggle('active', id === data.estimator_key);
+          });
+        }
+
+        // Latency breakdown items
+        document.getElementById('bd-infer').innerText = `${(data.infer_ms || 0).toFixed(1)} ms`;
+        document.getElementById('bd-rectify').innerText = `${(data.rectify_ms || 0).toFixed(1)} ms`;
+        document.getElementById('bd-depth').innerText = `${(data.depth_ms || 0).toFixed(1)} ms`;
+        document.getElementById('bd-vis').innerText = `${(data.vis_ms || 0).toFixed(1)} ms`;
+        let netDetails = '';
+        if (data.sender_fps > 0 || data.payload_kb > 0) {
+          const parts = [];
+          if (data.sender_fps > 0) parts.push(`${data.sender_fps.toFixed(1)} FPS`);
+          if (data.payload_kb > 0) parts.push(`${data.payload_kb.toFixed(1)} KB`);
+          netDetails = ` (Sender: ${parts.join(', ')})`;
+        }
+        document.getElementById('bd-net').innerText = `${(data.net_recv_ms || 0).toFixed(1)} ms${netDetails}`;
+
+        updateSwapButtonUI(data.swap_cameras);
+
+        const compElem = document.getElementById('metric-compactness');
+        compElem.innerText = `${data.compactness.toFixed(1)} %`;
+        if (data.compactness > 95.0) {
+          compElem.className = 'card-value good';
+          document.getElementById('metric-compactness-desc').innerText = '100% Solid (Zero Holes)';
+        } else {
+          compElem.className = 'card-value warning';
+          document.getElementById('metric-compactness-desc').innerText = 'Noticeable Holes (Traditional SGBM)';
+        }
+
+        if (data.target_depth && data.target_depth > 0) {
+          measuredZ = data.target_depth;
+          document.getElementById('target-measured').innerText = `${measuredZ.toFixed(2)} m (±${(data.target_std * 100).toFixed(1)} cm)`;
+          updateTapeError();
+        } else {
+          document.getElementById('target-measured').innerText = 'No valid depth at ROI';
+        }
+      } catch (err) {
+        // Network glitch or connection reset
+      } finally {
+        isPollingMetrics = false;
+        setTimeout(pollMetrics, 200);
+      }
+    }
+
+    // Call immediately on page load so metrics show instantly!
+    pollMetrics();
+  </script>
+</body>
+</html>
+

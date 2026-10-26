@@ -1,0 +1,6 @@
+numpy>=1.26.0
+opencv-python>=4.8.0
+onnxruntime-gpu>=1.16.0
+nvidia-cudnn-cu12>=9.0.0
+PySocks>=1.7.1
+
