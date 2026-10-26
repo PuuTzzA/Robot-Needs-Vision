@@ -82,6 +82,12 @@ Open a PowerShell or Command Prompt terminal on your **local laptop** (inside `R
 ```powershell
 python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --stream-scale 0.5
 ```
+```powershell
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --width 1280 --height 720 --stream-scale 1.0
+```
+```powershell
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --width 640 --height 480 --stream-scale 1.0
+```
 > **Stream Scale Presets**:
 > - **Standard Balanced (Default: `--stream-scale 0.5`)**: Transmits $960 \times 540$ per eye ($1920 \times 540$ composite) with tuned JPEG Quality 60. Cuts frame size to $\approx 50\text{–}55\text{ KB}$, delivering **12–18 FPS** with full 3-channel RGB preserved for neural models.
 > - **High-Speed Preset (`--stream-scale 0.35`)**: Transmits $672 \times 378$ per eye ($1344 \times 378$ composite). Drops frame size to $\approx 30\text{ KB}$ (a 76% reduction), delivering **20–30 FPS** over bandwidth-constrained SSH/VPN tunnels. The server automatically adapts focal length $f_x$ dynamically, keeping metric depth fully calibrated.

@@ -1,7 +1,7 @@
 import cv2
 
 # Set the indices you want to test here (e.g. [0], [1], or [0, 1])
-CAMERA_INDICES = [0, 2]
+CAMERA_INDICES = [1, 2]
 
 # Try to open each camera
 print("Starting camera test")
