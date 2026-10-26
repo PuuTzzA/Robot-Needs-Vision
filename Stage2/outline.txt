@@ -1,0 +1,17 @@
+1. Take picture of task1 => API call to get points
+loop:
+    2. Go to points and take picutre
+    3. API call to get object at point
+
+
+1. Take picture of task2 => API call to get wanted objects
+go to each point one by one:
+    2. Take a picture
+    3. API call to get class
+    if both objects are found:
+        exit
+
+
+1. Take picture of task3 
+2. Goto every point, take picture
+3. API call to get task and solution in one shot.
