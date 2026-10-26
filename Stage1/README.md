@@ -80,13 +80,14 @@ You will see:
 ### Step 2: Stream Your Cameras from Your Laptop
 Open a PowerShell or Command Prompt terminal on your **local laptop** (inside `Robot-Needs-Vision\Stage1`):
 ```powershell
-python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --stream-scale 0.5
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 1 --right-cam 2 --stream-scale 0.5
 ```
 ```powershell
-python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --width 1280 --height 720 --stream-scale 1.0
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 1 --right-cam 2 --width 1280 --height 720 --stream-scale 1.0
 ```
+**Do not use. The accuracy is way worse**
 ```powershell
-python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2 --width 640 --height 480 --stream-scale 1.0
+python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 1 --right-cam 2 --width 640 --height 480 --stream-scale 1.0
 ```
 > **Stream Scale Presets**:
 > - **Standard Balanced (Default: `--stream-scale 0.5`)**: Transmits $960 \times 540$ per eye ($1920 \times 540$ composite) with tuned JPEG Quality 60. Cuts frame size to $\approx 50\text{–}55\text{ KB}$, delivering **12–18 FPS** with full 3-channel RGB preserved for neural models.
@@ -205,7 +206,7 @@ During the evaluation, Teaching Assistants (TAs) will measure ground-truth dista
 
 | Problem | Cause | Solution |
 | :--- | :--- | :--- |
-| **"Could not open camera device"** on laptop | Wrong camera index | Try `--left-cam 1 --right-cam 2` or check camera permissions in your OS settings. |
+| **"Could not open camera device" / DirectShow warning** on laptop | Device busy, Windows COM release delay, or wrong device index | When restarting the sender after stopping, wait ~2–3 seconds for Windows DirectShow to cleanly release the USB endpoints. The sender includes automatic retries with backoff and staggered initialization. Check camera indices with `--left-cam 0 --right-cam 2` or `--left-cam 1 --right-cam 2`. |
 | **Left and Right views look inverted** | Camera indices swapped | Swap `--left-cam` and `--right-cam` arguments when running `laptop_camera_sender.py`. (Or click **🔄 Swap Cameras** in the web dashboard). |
 | **"Connection refused" on laptop** | Server harness is not running or port 8080 is blocked | Make sure `harness.py` is started on the server *before* running `laptop_camera_sender.py`, and ensure port 8080 is forwarded in VS Code. |
 | **Web page cannot connect to 8080** | Port 8080 not forwarded | In VS Code, check the **Ports** tab and ensure port 8080 is listed as Forwarded. In terminal SSH, use `-L 8080:localhost:8080`. |

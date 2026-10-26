@@ -118,37 +118,72 @@ def get_backend() -> int:
     return cv2.CAP_V4L2
 
 
-def open_camera(idx: int, width: int, height: int, backend: int) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(idx, backend)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(idx)
-    if not cap.isOpened():
-        raise RuntimeError(
-            f"Could not open camera device {idx}. Check connections and permissions."
-        )
+def open_camera(
+    idx: int,
+    width: int,
+    height: int,
+    backend: int,
+    retries: int = 5,
+    retry_delay: float = 0.8,
+) -> cv2.VideoCapture:
+    for attempt in range(1, retries + 1):
+        cap = cv2.VideoCapture(idx, backend)
+        # Avoid non-backend fallback on Windows, which triggers spurious FFMPEG/OBSensor warnings
+        if not cap.isOpened() and backend != cv2.CAP_ANY and platform.system() != "Windows":
+            cap = cv2.VideoCapture(idx)
 
-    # In DirectShow, resolution must be set FIRST, then FOURCC=MJPG, then FPS=30.
-    # Setting FOURCC before resolution causes DirectShow to reset to uncompressed YUY2!
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FPS, 30.0)
+        if cap.isOpened():
+            # In DirectShow, resolution must be set FIRST, then FOURCC=MJPG, then FPS=30.
+            # Setting FOURCC before resolution causes DirectShow to reset to uncompressed YUY2!
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FPS, 30.0)
 
-    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    actual_fps = float(cap.get(cv2.CAP_PROP_FPS))
-    fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
-    fcc_chars = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+            # Warm-up reads: verify the DirectShow / V4L2 filter graph is streaming frames
+            warmup_ok = False
+            for _ in range(5):
+                ret, frame = cap.read()
+                if ret and frame is not None and frame.size > 0:
+                    warmup_ok = True
+                    break
+                time.sleep(0.05)
 
-    print(
-        f"[LaptopSender] Camera {idx} initialized: {actual_w}x{actual_h} @ {actual_fps:.1f} FPS (FOURCC: '{fcc_chars}')"
+            if warmup_ok:
+                actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                actual_fps = float(cap.get(cv2.CAP_PROP_FPS))
+                fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+                fcc_chars = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+
+                print(
+                    f"[LaptopSender] Camera {idx} initialized: {actual_w}x{actual_h} @ {actual_fps:.1f} FPS (FOURCC: '{fcc_chars}')"
+                )
+                if actual_fps < 10.0 or fcc_chars.upper() == "YUY2":
+                    if actual_w > 1280:
+                        print(
+                            f"[LaptopSender] ⚠️ Camera {idx} negotiated uncompressed YUY2 at {actual_w}x{actual_h}. "
+                            f"If USB bandwidth limits FPS, try passing '--width 1280 --height 720' or '--width 640 --height 480'."
+                        )
+                return cap
+            else:
+                print(
+                    f"[LaptopSender] Camera {idx} opened but warmup read failed (attempt {attempt}/{retries}). Retrying..."
+                )
+                cap.release()
+        else:
+            print(
+                f"[LaptopSender] Camera {idx} busy or unreleased by OS (attempt {attempt}/{retries}). Retrying in {retry_delay:.1f}s..."
+            )
+            cap.release()
+
+        time.sleep(retry_delay)
+
+    raise RuntimeError(
+        f"Could not open camera device {idx} after {retries} attempts. "
+        f"Check physical USB connections, ensure no other application is using the camera, "
+        f"and allow ~2-3 seconds after stopping before restarting."
     )
-    if actual_fps < 10.0 or fcc_chars.upper() == "YUY2":
-        print(
-            f"[LaptopSender] ⚠️ Camera {idx} negotiated low FPS ({actual_fps:.1f}) or uncompressed YUY2. "
-            f"If USB bandwidth is limited, try passing '--width 1280 --height 720'."
-        )
-    return cap
 
 
 class CameraGrabber:
@@ -532,6 +567,8 @@ def main() -> None:
     )
 
     cam_l = open_camera(args.left_cam, args.width, args.height, backend)
+    # Stagger opening the second camera slightly so the USB root hub / DirectShow COM graph settles
+    time.sleep(0.4)
     cam_r = open_camera(args.right_cam, args.width, args.height, backend)
 
     grabber = CameraGrabber(cam_l, cam_r)
@@ -544,6 +581,7 @@ def main() -> None:
         grabber.stop()
         cam_l.release()
         cam_r.release()
+        time.sleep(0.2)
         print("[LaptopSender] Cameras released.")
 
 
