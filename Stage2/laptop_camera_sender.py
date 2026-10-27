@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--server",
         type=str,
-        default="127.0.0.1",
-        help="Server IP address or hostname running keypoint collector (default: 127.0.0.1).",
+        default="auto",
+        help="Server IP address, 'auto' for UDP LAN auto-discovery, or hostname (default: auto).",
     )
     parser.add_argument(
         "--port",
@@ -422,8 +422,64 @@ def stream_http(args: argparse.Namespace, grabber) -> None:
         worker_pool.stop()
 
 
+def discover_server(beacon_port: int = 8089, default_http_port: int = 8080, timeout: float = 1.2) -> tuple[str, int]:
+    """Auto-discover the Ubuntu VM IP and port on NAT or Bridged subnets via UDP broadcast."""
+    print("[LaptopSender] Searching for Stage 2 camera receiver via UDP LAN broadcast...")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.settimeout(timeout)
+
+    candidates = ["255.255.255.255", "192.168.52.255", "192.168.31.255", "127.0.0.1"]
+    for bcast in candidates:
+        try:
+            sock.sendto(b"TB4_CAMERA_DISCOVERY", (bcast, beacon_port))
+        except Exception:
+            pass
+
+    t_end = time.time() + timeout
+    while time.time() < t_end:
+        try:
+            data, addr = sock.recvfrom(512)
+            msg = data.decode("utf-8", errors="ignore")
+            if msg.startswith("TB4_CAMERA_OFFER:"):
+                discovered_port = int(msg.split(":")[1])
+                discovered_ip = addr[0]
+                print(f"[LaptopSender] Auto-discovered VM camera receiver at http://{discovered_ip}:{discovered_port}!")
+                sock.close()
+                return discovered_ip, discovered_port
+        except socket.timeout:
+            break
+        except Exception:
+            pass
+
+    sock.close()
+    # Check if known default subnet IPs are directly reachable
+    fallbacks = [
+        ("192.168.52.128", default_http_port), # VMware NAT default
+        ("127.0.0.1", default_http_port),
+    ]
+    for ip, port in fallbacks:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.4)
+            s.connect((ip, port))
+            s.close()
+            print(f"[LaptopSender] Reached VM via fallback address http://{ip}:{port}")
+            return ip, port
+        except Exception:
+            pass
+
+    print("[LaptopSender] [WARN] Auto-discovery timed out. Falling back to 192.168.52.128 (NAT) / 127.0.0.1.")
+    return "192.168.52.128", default_http_port
+
+
 def main() -> None:
     args = parse_args()
+
+    if args.server.lower() in ("auto", "discover"):
+        server_ip, server_port = discover_server(default_http_port=args.port)
+        args.server = server_ip
+        args.port = server_port
     backend = get_backend()
     print(f"[LaptopSender] OS: {platform.system()} | Camera backend: {backend}")
 

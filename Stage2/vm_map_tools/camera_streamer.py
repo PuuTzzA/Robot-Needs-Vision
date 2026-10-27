@@ -105,11 +105,61 @@ class CameraStreamer:
         self._fps_timer = time.perf_counter()
         self._http_server: ThreadedHttpServer | None = None
         self._http_thread: threading.Thread | None = None
+        self._discovery_socket: socket.socket | None = None
+        self._discovery_thread: threading.Thread | None = None
 
         if self.http_port:
             self._start_http_receiver()
+            self._start_udp_beacon()
 
         self._initialize_hardware()
+
+    @staticmethod
+    def get_all_host_ips() -> list[str]:
+        """Discover all non-loopback IPv4 addresses assigned to the machine."""
+        ips = []
+        try:
+            import subprocess
+            res = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2)
+            for addr in res.stdout.strip().split():
+                if addr and not addr.startswith("127."):
+                    ips.append(addr)
+        except Exception:
+            pass
+        if not ips:
+            try:
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                ips.append(s.getsockname()[0])
+                s.close()
+            except Exception:
+                ips.append("127.0.0.1")
+        return list(dict.fromkeys(ips))
+
+    def _start_udp_beacon(self, beacon_port: int = 8089) -> None:
+        """UDP discovery service allowing laptop_camera_sender.py to find the VM automatically."""
+        def beacon_loop():
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("0.0.0.0", beacon_port))
+                self._discovery_socket = sock
+            except OSError:
+                return
+
+            while self._running:
+                try:
+                    data, addr = sock.recvfrom(512)
+                    if b"TB4_CAMERA_DISCOVERY" in data:
+                        resp = f"TB4_CAMERA_OFFER:{self.http_port}".encode("utf-8")
+                        sock.sendto(resp, addr)
+                except Exception:
+                    break
+
+        self._discovery_thread = threading.Thread(target=beacon_loop, daemon=True)
+        self._discovery_thread.start()
 
     def _start_http_receiver(self) -> None:
         candidates = [self.http_port, 8081, 8088, 5000] if self.http_port else [8080, 8081]
@@ -121,18 +171,13 @@ class CameraStreamer:
                 self.http_port = p
                 self._http_thread = threading.Thread(target=server.serve_forever, daemon=True)
                 self._http_thread.start()
-                import socket
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                try:
-                    s.connect(("8.8.8.8", 80))
-                    vm_ip = s.getsockname()[0]
-                except Exception:
-                    vm_ip = "192.168.52.128"
-                finally:
-                    s.close()
 
+                all_ips = self.get_all_host_ips()
+                ip_str = " or ".join(all_ips)
                 print(f"[CameraStreamer] Network HTTP frame receiver listening on port {p} (/api/push_frame).")
-                print(f"[CameraStreamer] If streaming from Windows, run:\n       python Stage2\\laptop_camera_sender.py --server {vm_ip} --port {p} --single-cam 1\n")
+                print(f"[CameraStreamer] Auto-discovery active (UDP beacon port 8089).")
+                print(f"[CameraStreamer] Available VM IP(s): {ip_str}")
+                print(f"[CameraStreamer] From Windows, run:\n       python Stage2\\laptop_camera_sender.py --server auto --single-cam 0\n")
                 return
             except OSError:
                 continue
@@ -339,6 +384,11 @@ class CameraStreamer:
 
     def stop(self) -> None:
         self._running = False
+        if self._discovery_socket:
+            try:
+                self._discovery_socket.close()
+            except Exception:
+                pass
         if self._http_server:
             try:
                 self._http_server.shutdown()
