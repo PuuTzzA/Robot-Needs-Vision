@@ -1,6 +1,31 @@
 {
   "map_file": "final_room.yaml",
   "map_sha256": "bb1a6deca3869f4afe30f565fa90920d1c3c43f0c8e8f16fe453a5c406f2a3ac",
-  "updated_at": "2026-10-27 10:51:14",
-  "keypoints": []
+  "updated_at": "2026-10-27 11:35:34",
+  "keypoints": [
+    {
+      "id": 0,
+      "name": "0",
+      "x": 5.4803,
+      "y": 5.5317,
+      "yaw_degrees": 149.58,
+      "position": {
+        "x": 5.4803,
+        "y": 5.5317,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": 149.58,
+        "quaternion": {
+          "x": -0.002217307573210038,
+          "y": 0.0002830813662274222,
+          "z": 0.9649574022270981,
+          "w": 0.2623970565749479
+        }
+      },
+      "visibility": 0.9,
+      "timestamp": 1793100913.8799984,
+      "snapshot": "snapshots/keypoint_000_0.jpg"
+    }
+  ]
 }
