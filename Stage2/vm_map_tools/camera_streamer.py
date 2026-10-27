@@ -121,7 +121,18 @@ class CameraStreamer:
                 self.http_port = p
                 self._http_thread = threading.Thread(target=server.serve_forever, daemon=True)
                 self._http_thread.start()
+                import socket
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    s.connect(("8.8.8.8", 80))
+                    vm_ip = s.getsockname()[0]
+                except Exception:
+                    vm_ip = "192.168.52.128"
+                finally:
+                    s.close()
+
                 print(f"[CameraStreamer] Network HTTP frame receiver listening on port {p} (/api/push_frame).")
+                print(f"[CameraStreamer] If streaming from Windows, run:\n       python Stage2\\laptop_camera_sender.py --server {vm_ip} --port {p} --single-cam 1\n")
                 return
             except OSError:
                 continue

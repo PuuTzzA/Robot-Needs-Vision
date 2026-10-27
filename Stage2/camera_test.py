@@ -251,14 +251,28 @@ def main() -> None:
             return
 
         threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        # Detect VM IP for convenience
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            vm_ip = s.getsockname()[0]
+        except Exception:
+            vm_ip = "192.168.52.128"
+        finally:
+            s.close()
+
         print(f"[INFO] Waiting for stream from laptop_camera_sender.py on port {port} (/api/push_frame)...")
+        print(f"[INFO] Run this command on your Windows laptop:")
+        print(f"       python Stage2\\laptop_camera_sender.py --server {vm_ip} --port {port} --single-cam 1\n")
         has_display = "DISPLAY" in os.environ or "WAYLAND_DISPLAY" in os.environ
         try:
             while True:
                 with lock:
                     f = latest_network_frame[0].copy() if latest_network_frame[0] is not None else None
                 if f is not None and has_display:
-                    cv2.imshow(f"Network Stream (Port {args.http})", f)
+                    cv2.imshow(f"Network Stream (Port {port})", f)
                     if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):
                         break
                 time.sleep(0.01)
