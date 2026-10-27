@@ -23,6 +23,7 @@ import glob
 import os
 import platform
 import sys
+import threading
 import time
 import cv2
 import numpy as np
@@ -235,9 +236,22 @@ def main() -> None:
             daemon_threads = True
             allow_reuse_address = True
 
-        srv = Server(("0.0.0.0", args.http), Handler)
+        port = args.http
+        srv = None
+        for p in [port, port + 1, 8088, 5000]:
+            try:
+                srv = Server(("0.0.0.0", p), Handler)
+                port = p
+                break
+            except OSError:
+                continue
+
+        if srv is None:
+            print(f"[ERROR] Could not bind HTTP receiver to port {args.http} or alternate ports.")
+            return
+
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        print(f"[INFO] Waiting for stream from laptop_camera_sender.py on port {args.http}...")
+        print(f"[INFO] Waiting for stream from laptop_camera_sender.py on port {port} (/api/push_frame)...")
         has_display = "DISPLAY" in os.environ or "WAYLAND_DISPLAY" in os.environ
         try:
             while True:

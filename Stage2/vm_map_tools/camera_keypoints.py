@@ -511,20 +511,24 @@ def main() -> None:
     # Print description string on startup
     print(DESCRIPTION_BANNER)
 
+    script_dir = Path(__file__).resolve().parent
+    default_points = str(script_dir / "maps" / "stage2_keypoints.json")
+    default_map = str(script_dir / "maps" / "final_room.yaml")
+
     parser = argparse.ArgumentParser(description="Stage 2 Camera View & Keypoint Collector.")
     parser.add_argument(
         "--points",
         "-p",
         type=str,
-        default="Stage2/vm_map_tools/maps/stage2_keypoints.json",
-        help="Path where keypoints JSON file will be placed (default: Stage2/vm_map_tools/maps/stage2_keypoints.json).",
+        default=default_points,
+        help=f"Path where keypoints JSON file will be placed (default: {default_points}).",
     )
     parser.add_argument(
         "--map",
         "-m",
         type=str,
-        default="Stage2/vm_map_tools/maps/final_room.yaml",
-        help="Optional path to map YAML file (default: Stage2/vm_map_tools/maps/final_room.yaml).",
+        default=default_map,
+        help=f"Optional path to map YAML file (default: {default_map}).",
     )
     parser.add_argument(
         "--cameras",

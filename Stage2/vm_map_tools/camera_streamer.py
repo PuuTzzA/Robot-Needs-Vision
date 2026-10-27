@@ -112,15 +112,20 @@ class CameraStreamer:
         self._initialize_hardware()
 
     def _start_http_receiver(self) -> None:
-        try:
-            server = ThreadedHttpServer(("0.0.0.0", self.http_port), HttpFrameReceiver)
-            server.streamer = self
-            self._http_server = server
-            self._http_thread = threading.Thread(target=server.serve_forever, daemon=True)
-            self._http_thread.start()
-            print(f"[CameraStreamer] Network HTTP frame receiver listening on port {self.http_port} (/api/push_frame).")
-        except Exception as e:
-            print(f"[CameraStreamer] [INFO] HTTP port {self.http_port} not bound ({e}). Direct USB only.")
+        candidates = [self.http_port, 8081, 8088, 5000] if self.http_port else [8080, 8081]
+        for p in candidates:
+            try:
+                server = ThreadedHttpServer(("0.0.0.0", p), HttpFrameReceiver)
+                server.streamer = self
+                self._http_server = server
+                self.http_port = p
+                self._http_thread = threading.Thread(target=server.serve_forever, daemon=True)
+                self._http_thread.start()
+                print(f"[CameraStreamer] Network HTTP frame receiver listening on port {p} (/api/push_frame).")
+                return
+            except OSError:
+                continue
+        print(f"[CameraStreamer] [INFO] HTTP port not bound. Direct USB only.")
 
     def _on_network_frame(self, frame: np.ndarray) -> None:
         with self._lock:
