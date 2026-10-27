@@ -67,7 +67,7 @@ Available Terminal Commands:
   QUIT                     - Cleanly shut down cameras, save file, and exit
 
 OpenCV Window Shortcuts:
-  's' - Save snapshot image from camera feed
+  'f' - Save snapshot image from camera feed ('foto')
   'q' - Quit application
 ================================================================================
 """
@@ -477,7 +477,7 @@ def draw_hud(
         action_text = last_action
         color = (255, 255, 255)
     else:
-        action_text = "Enter 'SAVE <NAME> <VIS>' in terminal (e.g. SAVE A 0.5) | 's' for snapshot | 'q' to quit"
+        action_text = "Enter 'SAVE <NAME> <VIS>' in terminal (e.g. SAVE A 0.5) | 'f' for foto | 'q' to quit"
         color = (200, 200, 200)
 
     cv2.putText(frame, action_text, (15, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
@@ -678,26 +678,26 @@ def main() -> None:
                 cv2.imshow("Stage 2: Camera View & Keypoints", frame_hud)
 
                 key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), 27):
+                if key in (ord("q"), ord("Q"), 27):
                     print("\n[INFO] 'q' pressed in window. Exiting...")
                     node.persist()
                     running = False
                     break
-                elif key == ord("s"):
-                    # Manual snapshot
+                elif key in (ord("f"), ord("F")):
+                    # Manual snapshot ("f" for foto)
                     ts = int(time.time())
                     snap_p = node.snapshots_dir / f"manual_snapshot_{ts}.jpg"
                     if streamer.save_snapshot(str(snap_p)):
                         print(f"[Snapshot] Saved manual snapshot: {snap_p}")
                         last_action = f"Snapshot saved ({snap_p.name})"
                 # Optional teleop hotkeys when OpenCV window is focused
-                elif key == ord("w"):
+                elif key in (ord("w"), ord("W")):
                     node.teleop_twist(0.15, 0.0)
-                elif key == ord("s"):
+                elif key in (ord("s"), ord("S")):
                     node.teleop_twist(-0.15, 0.0)
-                elif key == ord("a"):
+                elif key in (ord("a"), ord("A")):
                     node.teleop_twist(0.0, 0.4)
-                elif key == ord("d"):
+                elif key in (ord("d"), ord("D")):
                     node.teleop_twist(0.0, -0.4)
                 elif key == 32:  # Spacebar
                     node.teleop_twist(0.0, 0.0)

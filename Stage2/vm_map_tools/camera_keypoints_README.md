@@ -115,5 +115,5 @@ When the camera preview window is focused:
 - **W / S**: Teleop drive forward / backward
 - **A / D**: Teleop turn left / right
 - **Space**: Stop robot motion
-- **S**: Save manual snapshot
+- **F**: Save manual snapshot (foto)
 - **Q / ESC**: Exit program
