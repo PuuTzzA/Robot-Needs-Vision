@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Preview USB cameras and diagnose negotiated formats inside Ubuntu/Linux.
 
-Ubuntu/VMware examples (use modes listed by v4l2-ctl --list-formats-ext):
-    python3 Stage2/camera_test_linux.py --cameras 0 --format MJPG
-    python3 Stage2/camera_test_linux.py --cameras 0 --format YUYV --fps 10
+Default: camera 0, automatic backend, untouched camera settings.
+    python3 Stage2/camera_test_linux.py
+
+To request a supported camera mode explicitly:
+    python3 Stage2/camera_test_linux.py --no-native --backend v4l2 --format MJPG
+    python3 Stage2/camera_test_linux.py --no-native --format YUYV --fps 10
 """
 import argparse
 import math
@@ -15,7 +18,11 @@ def parse_args():
     parser.add_argument('--cameras', type=int, nargs='+', default=[0],
                         help='Camera indices; start with one camera (default: 0)')
     parser.add_argument('--format', choices=['MJPG', 'YUYV', 'auto'], default='YUYV',
-                        help='Requested format; auto leaves the driver default unchanged')
+                        help='Requested pixel format; auto skips FOURCC only (use --native to skip all settings)')
+    parser.add_argument('--native', action=argparse.BooleanOptionalAction, default=True,
+                        help='Use untouched camera settings (default); --no-native enables format/size/FPS options')
+    parser.add_argument('--backend', choices=['v4l2', 'auto'], default='auto',
+                        help='Use V4L2 explicitly or let OpenCV select the backend')
     parser.add_argument('--width', type=int, default=640)
     parser.add_argument('--height', type=int, default=480)
     parser.add_argument('--fps', type=float, default=15)
@@ -41,9 +48,12 @@ def main():
     if system != 'Linux':
         print('Run this script inside Ubuntu/Linux, including the Ubuntu VM, not on its host.')
         return 1
-    backend = cv2.CAP_V4L2
-    print('Using Linux V4L2. In VMware, connect the USB camera to the Ubuntu guest first.')
-    print(f'Requested: {args.format}, {args.width}x{args.height}, {args.fps:g} FPS')
+    backend = cv2.CAP_V4L2 if args.backend == 'v4l2' else cv2.CAP_ANY
+    print(f'Backend selection: {args.backend}. Connect the USB camera to the Ubuntu guest first.')
+    if args.native:
+        print('Native mode: no camera properties will be set.')
+    else:
+        print(f'Requested: {args.format}, {args.width}x{args.height}, {args.fps:g} FPS')
     print('Settings are requests, not guarantees. Compare the reported mode and actual frames.')
     cameras, failures, reported = {}, {}, set()
     try:
@@ -65,6 +75,8 @@ def main():
                 ('FPS', cv2.CAP_PROP_FPS, args.fps),
                 ('color conversion', cv2.CAP_PROP_CONVERT_RGB, 1),
             ])
+            if args.native:
+                settings = []
             for label, prop, value in settings:
                 if not cap.set(prop, value):
                     print(f'[WARNING] Camera {idx}: driver did not accept {label}.')
