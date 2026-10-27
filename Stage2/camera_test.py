@@ -340,7 +340,7 @@ def main() -> None:
                         0.7,
                         (0, 255, 0),
                         2,
-                        cv2.LINE_AA,
+                        getattr(cv2, "LINE_AA", getattr(cv2, "LINE_8", 8)),
                     )
                     frames.append(frame)
 
