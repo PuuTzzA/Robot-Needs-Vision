@@ -3,7 +3,7 @@
 
 Supports:
   1. Direct USB capture via V4L2 (/dev/video*).
-  2. Network HTTP Push receiver (/api/push_frame on port 8080) for streaming
+  2. Network HTTP Push receiver (/api/push_frame on port 8080/8081) for streaming
      from a Windows host via laptop_camera_sender.py (avoids VMware USB packet drops).
   3. Synthetic test pattern fallback for headless/offline environments.
 """
@@ -59,6 +59,16 @@ class HttpFrameReceiver(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"success": true}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/api/push_frame":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ready"}')
         else:
             self.send_response(404)
             self.end_headers()
@@ -146,17 +156,23 @@ class CameraStreamer:
             try:
                 sock.bind(("0.0.0.0", beacon_port))
                 self._discovery_socket = sock
-            except OSError:
+            except OSError as err:
+                print(f"[CameraStreamer] [WARN] Could not bind UDP beacon port {beacon_port}: {err}")
                 return
 
             while self._running:
                 try:
                     data, addr = sock.recvfrom(512)
-                    if b"TB4_CAMERA_DISCOVERY" in data:
-                        resp = f"TB4_CAMERA_OFFER:{self.http_port}".encode("utf-8")
-                        sock.sendto(resp, addr)
                 except Exception:
-                    break
+                    time.sleep(0.01)
+                    continue
+
+                if b"TB4_CAMERA_DISCOVERY" in data:
+                    resp = f"TB4_CAMERA_OFFER:{self.http_port}".encode("utf-8")
+                    try:
+                        sock.sendto(resp, addr)
+                    except Exception:
+                        pass
 
         self._discovery_thread = threading.Thread(target=beacon_loop, daemon=True)
         self._discovery_thread.start()
