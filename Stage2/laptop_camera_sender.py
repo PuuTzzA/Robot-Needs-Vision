@@ -1,26 +1,37 @@
 #!/usr/bin/env python3
-"""Stage 2: Laptop Camera Sender for Windows / Linux.
+"""Stage 2: Laptop Camera Sender for Windows / Linux / macOS.
 
-Adapted from Stage 1 to support SINGLE-CAMERA mode as well as stereo pairs.
-Run this script LOCALLY on your laptop where the USB camera is plugged in.
-It captures frames, compresses them, and streams them over the local network
-(HTTP POST to /api/push_frame or TCP) to the VM.
+Captures frames from USB camera(s), compresses them to JPEG, and streams them
+over the local network (HTTP POST to /api/push_frame) to the Ubuntu VM.
+
+Key Features:
+  • Single-camera mode (--single-cam 0) or stereo pair mode (--left-cam 0 --right-cam 2).
+  • Multi-layered Auto-Discovery (--server auto):
+      1. VMware Workstation / Player host integration (vmrun / DHCP lease inspect).
+      2. Multi-interface UDP broadcast (binds to each physical adapter to traverse Bridged Wi-Fi/LAN).
+      3. Active subnet / ARP fallback probe.
+  • VPN Bypass: Automatically binds outbound TCP sockets to the matching local interface IP,
+    preventing university/corporate VPNs (like eduVPN/OpenVPN) from hijacking local VM traffic.
 
 Usage (Single Camera - Recommended when running from Windows to VM):
-    python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --single-cam 0
+    python Stage2\laptop_camera_sender.py --server auto --single-cam 0
 
 Usage (Stereo Pair):
-    python laptop_camera_sender.py --server 127.0.0.1 --port 8080 --left-cam 0 --right-cam 2
+    python Stage2\laptop_camera_sender.py --server auto --left-cam 0 --right-cam 2
 """
 
 from __future__ import annotations
 
 import argparse
 import http.client
+import ipaddress
+from pathlib import Path
 import platform
 import queue
+import re
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -34,19 +45,19 @@ def parse_args() -> argparse.Namespace:
         "--protocol",
         choices=["http", "tcp"],
         default="http",
-        help="Streaming protocol: 'http' (recommended, port 8080) or 'tcp' (default: http).",
+        help="Streaming protocol: 'http' (recommended, port 8080/8081) or 'tcp' (default: http).",
     )
     parser.add_argument(
         "--server",
         type=str,
         default="auto",
-        help="Server IP address, 'auto' for UDP LAN auto-discovery, or hostname (default: auto).",
+        help="Server IP address, 'auto' for multi-layer auto-discovery, or hostname (default: auto).",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8080,
-        help="Target port (default: 8080 for HTTP, 5555 for TCP).",
+        help="Target port (default: 8080; auto-discovers active port if set to auto).",
     )
     parser.add_argument(
         "--single-cam",
@@ -126,7 +137,7 @@ def open_camera(
     height: int,
     backend: int,
     retries: int = 5,
-    retry_delay: float = 0.8,
+    retry_delay: float = 0.5,
 ) -> cv2.VideoCapture:
     for attempt in range(1, retries + 1):
         cap = cv2.VideoCapture(idx, backend)
@@ -145,7 +156,7 @@ def open_camera(
                 if ret and frame is not None and frame.size > 0:
                     warmup_ok = True
                     break
-                time.sleep(0.05)
+                time.sleep(0.04)
 
             if warmup_ok:
                 actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -157,7 +168,15 @@ def open_camera(
                 cap.release()
         time.sleep(retry_delay)
 
-    raise RuntimeError(f"Could not open camera device {idx} after {retries} attempts.")
+    # Detect what camera indices are actually available on the system
+    available = []
+    for test_idx in range(4):
+        test_cap = cv2.VideoCapture(test_idx, backend)
+        if test_cap.isOpened():
+            available.append(test_idx)
+            test_cap.release()
+    hint = f" Available camera device(s): {available}." if available else ""
+    raise RuntimeError(f"Could not open camera device {idx} after {retries} attempts.{hint}")
 
 
 class SingleCameraGrabber:
@@ -259,12 +278,177 @@ class StereoCameraGrabber:
         self._thread.join(timeout=1.0)
 
 
+# ==============================================================================
+# Network Helpers: Interface Discovery & VPN Route Bypass
+# ==============================================================================
+
+def get_local_interfaces() -> list[tuple[str, str]]:
+    """Return a list of (interface_ip, broadcast_ip) for all active non-loopback IPv4 interfaces."""
+    interfaces: list[tuple[str, str]] = []
+    seen_ips = set()
+
+    # 1. Query hostname addresses
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if ip and not ip.startswith("127.") and ip not in seen_ips:
+                seen_ips.add(ip)
+    except Exception:
+        pass
+
+    # 2. Query default outbound socket routing
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        out_ip = s.getsockname()[0]
+        s.close()
+        if out_ip and not out_ip.startswith("127.") and out_ip not in seen_ips:
+            seen_ips.add(out_ip)
+    except Exception:
+        pass
+
+    for ip in seen_ips:
+        parts = ip.split(".")
+        if len(parts) == 4:
+            bcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+            interfaces.append((ip, bcast))
+
+    return interfaces
+
+
+def get_matching_source_ip(target_ip: str) -> str | None:
+    """Find the local IPv4 address sharing the subnet with target_ip.
+
+    Binding outbound sockets to this IP prevents VPN tunnels (like OpenVPN / eduVPN)
+    from capturing traffic intended for local Bridged or NAT subnets.
+    """
+    try:
+        t_addr = ipaddress.IPv4Address(target_ip)
+        if t_addr.is_loopback:
+            return "127.0.0.1"
+
+        interfaces = get_local_interfaces()
+        # Prefer /24 match
+        for lip, _ in interfaces:
+            try:
+                if ipaddress.IPv4Network(f"{lip}/24", strict=False) == ipaddress.IPv4Network(f"{target_ip}/24", strict=False):
+                    return lip
+            except Exception:
+                pass
+        # Fallback /16 match
+        for lip, _ in interfaces:
+            try:
+                if ipaddress.IPv4Network(f"{lip}/16", strict=False) == ipaddress.IPv4Network(f"{target_ip}/16", strict=False):
+                    return lip
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
+def probe_http_receiver(ip: str, port: int, timeout: float = 0.35) -> bool:
+    """Test if ip:port responds to HTTP and is the camera receiver."""
+    source_ip = get_matching_source_ip(ip)
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if source_ip and not ip.startswith("127."):
+            s.bind((source_ip, 0))
+        s.settimeout(timeout)
+        if s.connect_ex((ip, port)) != 0:
+            s.close()
+            return False
+
+        # Send minimal HTTP check
+        req = f"GET /api/push_frame HTTP/1.0\r\nHost: {ip}\r\nConnection: close\r\n\r\n".encode("ascii")
+        s.sendall(req)
+        resp = s.recv(256)
+        s.close()
+        # Accept HTTP status (501 Unsupported method or 200 OK or 405)
+        return b"HTTP/1." in resp
+    except Exception:
+        return False
+
+
+def get_vmware_guest_ips() -> list[str]:
+    """Query VMware Workstation/Player vmrun command or DHCP lease files for running VM IPs."""
+    ips: list[str] = []
+
+    # 1. Query vmrun CLI
+    vmrun_candidates = [
+        r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe",
+        r"C:\Program Files\VMware\VMware Workstation\vmrun.exe",
+        "vmrun",
+    ]
+    for exe in vmrun_candidates:
+        try:
+            res = subprocess.run([exe, "list"], capture_output=True, text=True, timeout=1.5)
+            if res.returncode == 0:
+                lines = res.stdout.strip().splitlines()
+                for line in lines[1:]:
+                    vmx = line.strip()
+                    if vmx.endswith(".vmx"):
+                        res_ip = subprocess.run([exe, "getGuestIPAddress", vmx], capture_output=True, text=True, timeout=1.5)
+                        if res_ip.returncode == 0:
+                            candidate = res_ip.stdout.strip()
+                            if candidate and candidate not in ips and not candidate.startswith("Error"):
+                                ips.append(candidate)
+                if ips:
+                    return ips
+        except Exception:
+            pass
+
+    # 2. Parse VMware DHCP lease file (useful for NAT mode fallback)
+    lease_paths = [
+        r"C:\ProgramData\VMware\vmnetdhcp.leases",
+        r"C:\ProgramData\VMware\vmnetdhcp.leases~",
+    ]
+    for lp in lease_paths:
+        try:
+            p = Path(lp)
+            if p.exists():
+                text = p.read_text(errors="ignore")
+                found = re.findall(r"lease\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\s*\{", text)
+                for f in reversed(found):
+                    if f not in ips:
+                        ips.append(f)
+        except Exception:
+            pass
+
+    return ips
+
+
+def get_arp_ips() -> list[str]:
+    """Read local ARP cache for reachable IPv4 addresses."""
+    ips: list[str] = []
+    try:
+        res = subprocess.run(["arp", "-a"], capture_output=True, text=True, timeout=1.0)
+        if res.returncode == 0:
+            found = re.findall(r"([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})", res.stdout)
+            for f in found:
+                if not f.endswith(".255") and not f.startswith("224.") and not f.startswith("239.") and f not in ips:
+                    ips.append(f)
+    except Exception:
+        pass
+    return ips
+
+
 class HttpSendWorkerPool:
-    def __init__(self, server: str, port: int, num_conns: int = 2, timeout: float = 5.0) -> None:
+    """Worker pool for sending JPEG frames over HTTP POST with persistent connections."""
+
+    def __init__(
+        self,
+        server: str,
+        port: int,
+        num_conns: int = 2,
+        timeout: float = 5.0,
+        source_ip: str | None = None,
+    ) -> None:
         self.server = server
         self.port = port
         self.num_conns = max(1, num_conns)
         self.timeout = timeout
+        self.source_ip = source_ip
         self.queue: queue.Queue[tuple[bytes, float, int]] = queue.Queue(maxsize=self.num_conns)
         self.running = True
         self.sent_count = 0
@@ -300,6 +484,8 @@ class HttpSendWorkerPool:
             "Connection": "keep-alive",
         }
         conn: http.client.HTTPConnection | None = None
+        source_addr = (self.source_ip, 0) if self.source_ip else None
+
         while self.running:
             try:
                 payload, timestamp, seq = self.queue.get(timeout=0.1)
@@ -308,7 +494,12 @@ class HttpSendWorkerPool:
 
             try:
                 if conn is None:
-                    conn = http.client.HTTPConnection(self.server, self.port, timeout=self.timeout)
+                    conn = http.client.HTTPConnection(
+                        self.server,
+                        self.port,
+                        timeout=self.timeout,
+                        source_address=source_addr,
+                    )
                     conn.connect()
 
                 req_headers = dict(headers)
@@ -369,8 +560,12 @@ def stream_http(args: argparse.Namespace, grabber) -> None:
     scale = max(0.1, min(1.0, float(args.stream_scale)))
     num_conns = max(1, int(args.http_conns))
 
+    source_ip = get_matching_source_ip(args.server)
+    if source_ip and not args.server.startswith("127."):
+        print(f"[LaptopSender] Local interface bound to {source_ip} (VPN bypass active)")
+
     print(f"[LaptopSender] Streaming to http://{args.server}:{args.port}/api/push_frame...")
-    worker_pool = HttpSendWorkerPool(args.server, args.port, num_conns=num_conns, timeout=args.timeout)
+    worker_pool = HttpSendWorkerPool(args.server, args.port, num_conns=num_conns, timeout=args.timeout, source_ip=source_ip)
     last_seq = -1
     fps_timer = time.perf_counter()
 
@@ -406,8 +601,9 @@ def stream_http(args: argparse.Namespace, grabber) -> None:
                 dt = now - fps_timer
                 net_fps, rate_mb, avg_rtt, kb = worker_pool.get_and_reset_stats(dt)
                 cam_fps = grabber.get_grab_fps()
+                rtt_str = f"{avg_rtt:.0f} ms" if avg_rtt > 0 else "-- ms"
                 sys.stdout.write(
-                    f"\r[Stream] Camera: {cam_fps:.1f} FPS | Network: {net_fps:.1f} FPS | Frame: {kb:.1f} KB"
+                    f"\r[Stream] Camera: {cam_fps:.1f} FPS | Network: {net_fps:.1f} FPS | RTT: {rtt_str} | Frame: {kb:.1f} KB"
                 )
                 sys.stdout.flush()
                 fps_timer = now
@@ -422,55 +618,87 @@ def stream_http(args: argparse.Namespace, grabber) -> None:
         worker_pool.stop()
 
 
-def discover_server(beacon_port: int = 8089, default_http_port: int = 8080, timeout: float = 1.2) -> tuple[str, int]:
-    """Auto-discover the Ubuntu VM IP and port on NAT or Bridged subnets via UDP broadcast."""
-    print("[LaptopSender] Searching for Stage 2 camera receiver via UDP LAN broadcast...")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.settimeout(timeout)
+def discover_server(beacon_port: int = 8089, default_http_port: int = 8080, timeout: float = 1.5) -> tuple[str, int]:
+    """Auto-discover the Ubuntu VM IP and port on Bridged or NAT subnets."""
+    print("[LaptopSender] Searching for Stage 2 camera receiver via multi-layer discovery...")
 
-    candidates = ["255.255.255.255", "192.168.52.255", "192.168.31.255", "127.0.0.1"]
-    for bcast in candidates:
-        try:
-            sock.sendto(b"TB4_CAMERA_DISCOVERY", (bcast, beacon_port))
-        except Exception:
-            pass
+    candidate_ports = [default_http_port, 8081, 8080, 8088, 5000]
+    # Remove duplicates preserving order
+    candidate_ports = list(dict.fromkeys(candidate_ports))
 
-    t_end = time.time() + timeout
-    while time.time() < t_end:
-        try:
-            data, addr = sock.recvfrom(512)
-            msg = data.decode("utf-8", errors="ignore")
-            if msg.startswith("TB4_CAMERA_OFFER:"):
-                discovered_port = int(msg.split(":")[1])
-                discovered_ip = addr[0]
-                print(f"[LaptopSender] Auto-discovered VM camera receiver at http://{discovered_ip}:{discovered_port}!")
-                sock.close()
-                return discovered_ip, discovered_port
-        except socket.timeout:
-            break
-        except Exception:
-            pass
+    # --------------------------------------------------------------------------
+    # Strategy 1: VMware Guest Direct Query (Fastest & 100% reliable for VMs)
+    # --------------------------------------------------------------------------
+    vm_ips = get_vmware_guest_ips()
+    for vm_ip in vm_ips:
+        for p in candidate_ports:
+            if probe_http_receiver(vm_ip, p, timeout=0.35):
+                print(f"[LaptopSender] Auto-discovered VMware VM at http://{vm_ip}:{p} (via VMware host integration)!")
+                return vm_ip, p
 
-    sock.close()
-    # Check if known default subnet IPs are directly reachable
+    # --------------------------------------------------------------------------
+    # Strategy 2: Multi-Interface UDP Broadcast
+    # --------------------------------------------------------------------------
+    interfaces = get_local_interfaces()
+    udp_sockets: list[socket.socket] = []
+    try:
+        for lip, bcast in interfaces:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                sock.bind((lip, 0))
+                sock.settimeout(0.2)
+                for b_target in [bcast, "255.255.255.255"]:
+                    try:
+                        sock.sendto(b"TB4_CAMERA_DISCOVERY", (b_target, beacon_port))
+                    except Exception:
+                        pass
+                udp_sockets.append(sock)
+            except Exception:
+                pass
+
+        # Listen for response
+        t_end = time.time() + timeout
+        while time.time() < t_end:
+            for s in udp_sockets:
+                try:
+                    data, addr = s.recvfrom(512)
+                    msg = data.decode("utf-8", errors="ignore")
+                    if msg.startswith("TB4_CAMERA_OFFER:"):
+                        discovered_port = int(msg.split(":")[1])
+                        discovered_ip = addr[0]
+                        print(f"[LaptopSender] Auto-discovered VM camera receiver at http://{discovered_ip}:{discovered_port}!")
+                        return discovered_ip, discovered_port
+                except (socket.timeout, BlockingIOError, OSError):
+                    continue
+            time.sleep(0.02)
+    finally:
+        for s in udp_sockets:
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    # --------------------------------------------------------------------------
+    # Strategy 3: Local Subnet ARP & Candidate Sweep
+    # --------------------------------------------------------------------------
+    arp_ips = get_arp_ips()
     fallbacks = [
-        ("192.168.52.128", default_http_port), # VMware NAT default
-        ("127.0.0.1", default_http_port),
+        "192.168.31.253",  # Known bridged VM address
+        "192.168.52.128",  # VMware NAT default
+        "127.0.0.1",
     ]
-    for ip, port in fallbacks:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.4)
-            s.connect((ip, port))
-            s.close()
-            print(f"[LaptopSender] Reached VM via fallback address http://{ip}:{port}")
-            return ip, port
-        except Exception:
-            pass
+    all_candidates = list(dict.fromkeys(vm_ips + arp_ips + fallbacks))
+    for ip in all_candidates:
+        for p in candidate_ports:
+            if probe_http_receiver(ip, p, timeout=0.25):
+                print(f"[LaptopSender] Reached VM camera receiver at http://{ip}:{p} (via subnet probe)")
+                return ip, p
 
-    print("[LaptopSender] [WARN] Auto-discovery timed out. Falling back to 192.168.52.128 (NAT) / 127.0.0.1.")
-    return "192.168.52.128", default_http_port
+    print("[LaptopSender] [WARN] Auto-discovery could not find an active HTTP receiver.")
+    best_guess = vm_ips[0] if vm_ips else "192.168.31.253"
+    print(f"[LaptopSender] Falling back to {best_guess}:{default_http_port}.")
+    return best_guess, default_http_port
 
 
 def main() -> None:
@@ -480,6 +708,16 @@ def main() -> None:
         server_ip, server_port = discover_server(default_http_port=args.port)
         args.server = server_ip
         args.port = server_port
+    else:
+        # If user explicitly provided an IP, verify if target port has the receiver
+        # or if it relocated to 8081/8088
+        if not probe_http_receiver(args.server, args.port, timeout=0.3):
+            for alt_port in [8081, 8080, 8088, 5000]:
+                if alt_port != args.port and probe_http_receiver(args.server, alt_port, timeout=0.3):
+                    print(f"[LaptopSender] Auto-switched to active receiver port {alt_port} on {args.server}.")
+                    args.port = alt_port
+                    break
+
     backend = get_backend()
     print(f"[LaptopSender] OS: {platform.system()} | Camera backend: {backend}")
 
@@ -510,4 +748,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
