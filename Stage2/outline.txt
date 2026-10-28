@@ -13,6 +13,6 @@ go to each point one by one:
 
 
 1. Take picture of task3 
-2. Goto every point, take picture
+2. Goto every point, take picture, estimate height from stereo
 3. API call to get task and solution in one shot.
 

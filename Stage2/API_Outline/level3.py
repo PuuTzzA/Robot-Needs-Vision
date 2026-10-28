@@ -43,7 +43,7 @@ Read the laptop screen at Point A carefully and transcribe the task verbatim:
 - An example for a task could be: Please count how many objects in the venue have the same color as the object at Point D. 
 
 #### STEP 2: Ground Truth Inventory (Points B to J)
-Cross-reference the sensor estimates with the actual photos for Points B to J. If the initial sensor estimate appears incorrect, correct it based on visual evidence.
+Cross-reference the sensor estimates with the actual photos for Points B to J. If the initial sensor estimate appears incorrect, correct it based on visual evidence. For reference the box the objects are sitting on is 9cm high.
 Create an internal inventory listing:
 - Location (B through J)
 - Final Object Class

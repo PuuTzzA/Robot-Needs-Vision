@@ -1,0 +1,8 @@
+numpy>=1.26.0
+opencv-python>=4.8.0
+onnxruntime-gpu>=1.16.0
+nvidia-cudnn-cu12>=9.0.0
+torch>=2.0.0
+ultralytics>=8.0.0
+PyYAML>=6.0
+
