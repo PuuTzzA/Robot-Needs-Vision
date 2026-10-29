@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     from .mission import MissionManager
 
 from shared.protocol import RobotStatus
+from .manual_capture import ManualCapture
+from .llm import llm_api
 
 
 class MissionControlGUI:
@@ -46,6 +48,7 @@ class MissionControlGUI:
         self.m = mission
         self.dispatcher = dispatcher
         self.map_renderer = map_renderer
+        self.manual_capture = ManualCapture(mission.camera, mission.runs_dir)
 
         self.root.title("TurtleBot4 - Stage 2 Autonomous Mission Control")
         self.root.geometry("1480x880")
@@ -159,6 +162,11 @@ class MissionControlGUI:
             padx=6,
         )
         self.lbl_left_hdr.pack(fill="x")
+        self.btn_capture = tk.Button(
+            panel_left_cam, text="Capture & Analyze", command=self._on_capture,
+            font=self.font_header, bg="#2563eb", fg="white", relief="flat", pady=5,
+        )
+        self.btn_capture.pack(fill="x")
         self.canvas_left_cam = tk.Label(panel_left_cam, bg="#111827", text="Waiting for Left Camera...")
         self.canvas_left_cam.pack(fill="both", expand=True)
 
@@ -235,6 +243,11 @@ class MissionControlGUI:
             pady=8,
         )
         self.lbl_result.pack(fill="x")
+        self.btn_level_results = tk.Button(
+            panel_result, text="Show level results", command=self._show_level_results,
+            font=self.font_body, relief="flat",
+        )
+        self.btn_level_results.pack(anchor="e", padx=8, pady=(0, 4))
 
         # ---------------------------------------------------------------------
         # 5. Right Sidebar: Commands, Input, and Console Out
@@ -340,6 +353,14 @@ class MissionControlGUI:
     # Updates & Event Handlers
     # -------------------------------------------------------------------------
 
+    def _on_capture(self) -> None:
+        if not self.m.is_running():
+            self.manual_capture.start(mock=llm_api.is_mock_mode())
+
+    def _show_level_results(self) -> None:
+        if not self.manual_capture.busy:
+            self.manual_capture.result_text = ""
+
     def _on_key_press(self, event: tk.Event) -> None:
         # Ignore teleop keys if user is typing in the entry input box
         if self.root.focus_get() == self.entry_cmd:
@@ -361,6 +382,12 @@ class MissionControlGUI:
         cmd_text = self.entry_cmd.get().strip()
         if not cmd_text:
             return
+        command = cmd_text.split()[0].upper()
+        if self.manual_capture.busy and command in {"LEVEL", "RESTART", "PHOTO", "MEASURE", "CLASSIFY"}:
+            print("[Capture] Wait for manual image analysis to finish before starting this command.")
+            return
+        if command in {"LEVEL", "RESTART", "PHOTO", "MEASURE", "CLASSIFY"}:
+            self.manual_capture.result_text = ""
         self.entry_cmd.delete(0, tk.END)
         self.history.append(cmd_text)
         self.history_idx = len(self.history)
@@ -394,6 +421,17 @@ class MissionControlGUI:
 
     def _update_loop(self) -> None:
         """Main Tkinter 20 Hz update loop."""
+        # Manual worker only emits data; apply all widget/model updates on the Tk thread.
+        for kind, value in self.manual_capture.poll():
+            if kind == "captured":
+                frame, name = value
+                self.m.set_processed_frame(frame, name)
+        self.btn_capture.config(
+            state="disabled" if self.manual_capture.busy or self.m.is_running() else "normal",
+            text="Analyzing..." if self.manual_capture.busy else "Capture & Analyze",
+        )
+        self.btn_level_results.config(state="disabled" if self.manual_capture.busy else "normal")
+
         # 1. Update Status & Headers
         self.lbl_status.config(text=f"Status: {self.m.status_text}")
         lvl_str = f"Level: {self.m.current_level}" if self.m.current_level > 0 else "Level: -"
@@ -409,7 +447,9 @@ class MissionControlGUI:
         # 3. Update Result Banner
         cur_lvl = self.m.current_level or 1
         res_text = self.m.level_results.get(cur_lvl, "")
-        if res_text:
+        if self.manual_capture.result_text:
+            self.lbl_result.config(text="Result — image-based estimate:\n" + self.manual_capture.result_text)
+        elif res_text:
             self.lbl_result.config(text=f"Result, Level {cur_lvl}:\n{res_text}")
         else:
             self.lbl_result.config(text=f"Result, Level {cur_lvl}:\n(Awaiting task completion)")
@@ -477,6 +517,7 @@ class MissionControlGUI:
             pass
 
     def _on_close(self) -> None:
+        self.manual_capture.close()
         self.m.stop()
         self.m.camera.stop()
         self.m.robot.stop()
