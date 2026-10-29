@@ -59,7 +59,8 @@ ros2 launch turtlebot4_navigation localization.launch.py \
 source /opt/ros/humble/setup.bash
 source ~/turtlebot4_ws/install/setup.bash
 
-ros2 launch turtlebot4_navigation nav2.launch.py
+ros2 launch turtlebot4_navigation nav2.launch.py \
+  params_file:=$HOME/Robot-Needs-Vision/Stage2/vm_map_tools/maps/nav2_params.yaml
 ```
 
 **Terminal 3 — RViz Visualization**:

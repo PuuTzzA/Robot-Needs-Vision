@@ -24,6 +24,7 @@ STEP_TIMEOUT=300  # 5 minutes (300 seconds) per step
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAP_FILE="${SCRIPT_DIR}/maps/final_room.yaml"
 PARAMS_FILE="${SCRIPT_DIR}/maps/localization_params.yaml"
+NAV2_PARAMS_FILE="${SCRIPT_DIR}/maps/nav2_params.yaml"
 
 LOG_DIR="/tmp/turtlebot4_bringup_logs"
 mkdir -p "${LOG_DIR}"
@@ -158,6 +159,7 @@ echo -e "  • ROS_DOMAIN_ID:      ${GREEN}${ROS_DOMAIN_ID}${NC}"
 echo -e "  • RMW_IMPLEMENTATION: ${GREEN}${RMW_IMPLEMENTATION}${NC}"
 echo -e "  • VM IP Address(es):  ${GREEN}${VM_IPS}${NC}"
 echo -e "  • Map File:           ${CYAN}${MAP_FILE}${NC}"
+echo -e "  • Nav2 Params File:   ${CYAN}${NAV2_PARAMS_FILE}${NC}"
 echo -e "  • Step Timeout Limit: ${CYAN}${STEP_TIMEOUT}s (5 minutes)${NC}"
 
 if [ ! -f "${MAP_FILE}" ]; then
@@ -165,6 +167,9 @@ if [ ! -f "${MAP_FILE}" ]; then
 fi
 if [ ! -f "${PARAMS_FILE}" ]; then
     fail_and_abort "Localization params file not found at ${PARAMS_FILE}" ""
+fi
+if [ ! -f "${NAV2_PARAMS_FILE}" ]; then
+    fail_and_abort "Nav2 params file not found at ${NAV2_PARAMS_FILE}" ""
 fi
 
 # ------------------------------------------------------------------------------
@@ -321,7 +326,8 @@ echo -e "\n${BOLD}[4/5] Starting Nav2 Navigation Stack (Timeout: ${STEP_TIMEOUT}
 echo -e "  • Log file: ${CYAN}${LOG_NAV}${NC}"
 : > "${LOG_NAV}"
 
-ros2 launch turtlebot4_navigation nav2.launch.py > "${LOG_NAV}" 2>&1 &
+ros2 launch turtlebot4_navigation nav2.launch.py \
+    params_file:="${NAV2_PARAMS_FILE}" > "${LOG_NAV}" 2>&1 &
 PID_NAV=$!
 
 START_NAV=$(date +%s)
