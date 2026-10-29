@@ -1,31 +1,247 @@
 {
   "map_file": "final_room.yaml",
   "map_sha256": "bb1a6deca3869f4afe30f565fa90920d1c3c43f0c8e8f16fe453a5c406f2a3ac",
-  "updated_at": "2026-10-27 11:35:34",
+  "updated_at": "2026-10-29 11:03:41",
   "keypoints": [
     {
-      "id": 0,
+      "id": 5,
       "name": "0",
-      "x": 5.4803,
-      "y": 5.5317,
-      "yaw_degrees": 149.58,
+      "x": 5.4239,
+      "y": 5.4323,
+      "yaw_degrees": 141.14,
       "position": {
-        "x": 5.4803,
-        "y": 5.5317,
+        "x": 5.4239,
+        "y": 5.4323,
         "z": 0.0
       },
       "rotation": {
-        "yaw_degrees": 149.58,
+        "yaw_degrees": 141.14,
         "quaternion": {
-          "x": -0.002217307573210038,
-          "y": 0.0002830813662274222,
-          "z": 0.9649574022270981,
-          "w": 0.2623970565749479
+          "x": -0.0002764028823382943,
+          "y": 0.001494418119611458,
+          "z": 0.9430480133258244,
+          "w": 0.3326531750609728
         }
       },
-      "visibility": 0.9,
-      "timestamp": 1793100913.8799984,
-      "snapshot": "snapshots/keypoint_000_0.jpg"
+      "visibility": 1.0,
+      "timestamp": 1793270837.418704,
+      "snapshot": "snapshots/keypoint_005_0.jpg"
+    },
+    {
+      "id": 6,
+      "name": "C",
+      "x": 5.4108,
+      "y": 5.4118,
+      "yaw_degrees": 56.4,
+      "position": {
+        "x": 5.4108,
+        "y": 5.4118,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": 56.4,
+        "quaternion": {
+          "x": 0.0008437455772319493,
+          "y": -0.0005527511087323449,
+          "z": 0.47252397624390413,
+          "w": 0.88131723824867
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793270900.7356322,
+      "snapshot": "snapshots/keypoint_006_C.jpg"
+    },
+    {
+      "id": 7,
+      "name": "D",
+      "x": 4.6396,
+      "y": 5.1978,
+      "yaw_degrees": 137.33,
+      "position": {
+        "x": 4.6396,
+        "y": 5.1978,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": 137.33,
+        "quaternion": {
+          "x": 0.0014645097844888445,
+          "y": 0.0004318998144866006,
+          "z": 0.9314767111455203,
+          "w": 0.363797753246452
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793270950.6510687,
+      "snapshot": "snapshots/keypoint_007_D.jpg"
+    },
+    {
+      "id": 8,
+      "name": "A",
+      "x": 5.0218,
+      "y": 8.4668,
+      "yaw_degrees": -124.75,
+      "position": {
+        "x": 5.0218,
+        "y": 8.4668,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -124.75,
+        "quaternion": {
+          "x": -0.0014371800416541356,
+          "y": 0.0002314020203579847,
+          "z": 0.8860001370618509,
+          "w": -0.4636826911725457
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271045.352735,
+      "snapshot": "snapshots/keypoint_008_A.jpg"
+    },
+    {
+      "id": 9,
+      "name": "B",
+      "x": 4.5179,
+      "y": 10.1333,
+      "yaw_degrees": -121.46,
+      "position": {
+        "x": 4.5179,
+        "y": 10.1333,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -121.46,
+        "quaternion": {
+          "x": -0.0009550921134886185,
+          "y": 0.00034028376655807573,
+          "z": 0.8723332654470112,
+          "w": -0.48891067282333633
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271084.7960584,
+      "snapshot": "snapshots/keypoint_009_B.jpg"
+    },
+    {
+      "id": 10,
+      "name": "E",
+      "x": 5.0997,
+      "y": 10.5205,
+      "yaw_degrees": -25.12,
+      "position": {
+        "x": 5.0997,
+        "y": 10.5205,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -25.12,
+        "quaternion": {
+          "x": -0.00017773287630934212,
+          "y": -0.0015433326413496872,
+          "z": -0.21748201057525807,
+          "w": 0.9760630930485622
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271117.3202431,
+      "snapshot": "snapshots/keypoint_010_E.jpg"
+    },
+    {
+      "id": 12,
+      "name": "H",
+      "x": 0.7855,
+      "y": 8.0898,
+      "yaw_degrees": 25.08,
+      "position": {
+        "x": 0.7855,
+        "y": 8.0898,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": 25.08,
+        "quaternion": {
+          "x": -0.0004104428480629515,
+          "y": -0.00018089469460717822,
+          "z": 0.21714977451747441,
+          "w": 0.976138194233167
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271563.3947647,
+      "snapshot": "snapshots/keypoint_012_H.jpg"
+    },
+    {
+      "id": 13,
+      "name": "G",
+      "x": 0.598,
+      "y": 7.4256,
+      "yaw_degrees": -12.26,
+      "position": {
+        "x": 0.598,
+        "y": 7.4256,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -12.26,
+        "quaternion": {
+          "x": 0.0008016649384339957,
+          "y": 0.0006309777931170924,
+          "z": -0.10682601343822484,
+          "w": 0.9942772058401255
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271620.055949,
+      "snapshot": "snapshots/keypoint_013_G.jpg"
+    },
+    {
+      "id": 14,
+      "name": "I",
+      "x": 3.6689,
+      "y": 10.7774,
+      "yaw_degrees": -128.69,
+      "position": {
+        "x": 3.6689,
+        "y": 10.7774,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -128.69,
+        "quaternion": {
+          "x": -0.00034272394848940894,
+          "y": 8.662332063257834e-05,
+          "z": 0.901405141732434,
+          "w": -0.43297649531472954
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271720.4506655,
+      "snapshot": "snapshots/keypoint_014_I.jpg"
+    },
+    {
+      "id": 15,
+      "name": "F",
+      "x": 4.7476,
+      "y": 9.9845,
+      "yaw_degrees": 133.02,
+      "position": {
+        "x": 4.7476,
+        "y": 9.9845,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": 133.02,
+        "quaternion": {
+          "x": 0.0011730080050139217,
+          "y": 0.00023442231054621518,
+          "z": 0.9171356612770327,
+          "w": 0.39857339087342536
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793271773.3579106,
+      "snapshot": "snapshots/keypoint_015_F.jpg"
     }
   ]
 }

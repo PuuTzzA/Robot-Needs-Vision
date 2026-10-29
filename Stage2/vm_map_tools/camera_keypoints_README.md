@@ -17,6 +17,11 @@ A dedicated tool for Stage 2 on Ubuntu that pairs real-time camera inspection wi
 
 ## Complete Workflow & Setup
 
+### Autostart
+```bash
+cd ~/Robot-Needs-Vision/Stage2/vm_map_tools ./auto_nav_bringup.sh
+```
+
 ### Step 0: VMware Network Configuration
 To allow ROS 2 to communicate with the physical TurtleBot 4 while keeping your Windows VPN active:
 - **Dual Network Adapters (Recommended)**:
@@ -34,6 +39,7 @@ If you recently switched network modes or restarted ROS 2, clean stale FastDDS s
 ```
 
 ---
+
 
 ### Step 2: Launch ROS 2 Stack (Ubuntu VM)
 Open **3 separate terminals** in Ubuntu:

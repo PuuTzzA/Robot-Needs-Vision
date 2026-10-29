@@ -1,10 +1,12 @@
 Compact package: Final map + waypoint navigation program
 For Ubuntu VM with ROS 2 Humble, TurtleBot 4 navigation/viz, and Nav2 installed.
 
-1. Pre-flight cleanup (run once if network mode changed):
-~/Robot-Needs-Vision/Stage2/vm_map_tools/start_stage2_ros.sh
+1. Automatic 1-Step Bringup (Recommended):
+~/Robot-Needs-Vision/Stage2/vm_map_tools/auto_nav_bringup.sh
+(Checks /odom and /scan hardware connectivity, cleans stale FastDDS cache, launches localization, Nav2, and software-accelerated RViz with a single command).
 
-2. Run in three separate terminals on Ubuntu:
+2. Manual 3-Terminal Bringup (Alternative):
+Run in three separate terminals on Ubuntu:
 Terminal 1:
 source /opt/ros/humble/setup.bash
 source ~/turtlebot4_ws/install/setup.bash
@@ -19,6 +21,8 @@ ros2 launch turtlebot4_navigation nav2.launch.py
 
 Terminal 3:
 source /opt/ros/humble/setup.bash
+source ~/turtlebot4_ws/install/setup.bash
+export LIBGL_ALWAYS_SOFTWARE=1
 ros2 launch turtlebot4_viz view_robot.launch.py
 
 3. Confirm that the VM receives the robot's /scan, /odom, and TF.
