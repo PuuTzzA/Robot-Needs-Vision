@@ -4,7 +4,7 @@
   "updated_at": "2026-10-29 11:03:41",
   "keypoints": [
     {
-      "id": 5,
+      "id": 0,
       "name": "0",
       "x": 5.4239,
       "y": 5.4323,
@@ -28,7 +28,7 @@
       "snapshot": "snapshots/keypoint_005_0.jpg"
     },
     {
-      "id": 6,
+      "id": 1,
       "name": "C",
       "x": 5.4108,
       "y": 5.4118,
@@ -52,7 +52,7 @@
       "snapshot": "snapshots/keypoint_006_C.jpg"
     },
     {
-      "id": 7,
+      "id": 2,
       "name": "D",
       "x": 4.6396,
       "y": 5.1978,
@@ -76,7 +76,7 @@
       "snapshot": "snapshots/keypoint_007_D.jpg"
     },
     {
-      "id": 8,
+      "id": 3,
       "name": "A",
       "x": 5.0218,
       "y": 8.4668,
@@ -100,7 +100,7 @@
       "snapshot": "snapshots/keypoint_008_A.jpg"
     },
     {
-      "id": 9,
+      "id": 4,
       "name": "B",
       "x": 4.5179,
       "y": 10.1333,
@@ -124,7 +124,7 @@
       "snapshot": "snapshots/keypoint_009_B.jpg"
     },
     {
-      "id": 10,
+      "id": 5,
       "name": "E",
       "x": 5.0997,
       "y": 10.5205,
@@ -148,7 +148,7 @@
       "snapshot": "snapshots/keypoint_010_E.jpg"
     },
     {
-      "id": 12,
+      "id": 6,
       "name": "H",
       "x": 0.7855,
       "y": 8.0898,
@@ -172,7 +172,7 @@
       "snapshot": "snapshots/keypoint_012_H.jpg"
     },
     {
-      "id": 13,
+      "id": 7,
       "name": "G",
       "x": 0.598,
       "y": 7.4256,
@@ -196,7 +196,7 @@
       "snapshot": "snapshots/keypoint_013_G.jpg"
     },
     {
-      "id": 14,
+      "id": 8,
       "name": "I",
       "x": 3.6689,
       "y": 10.7774,
@@ -220,7 +220,7 @@
       "snapshot": "snapshots/keypoint_014_I.jpg"
     },
     {
-      "id": 15,
+      "id": 9,
       "name": "F",
       "x": 4.7476,
       "y": 9.9845,
