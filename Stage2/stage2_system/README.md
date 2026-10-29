@@ -106,9 +106,37 @@ cd ~/Robot-Needs-Vision/Stage2/stage2_system/ssh
 ---
 
 ### Step 2: Start ROS 2 & Robot Controller (Ubuntu VM)
-Open **3 terminals** in the Ubuntu VM:
 
-**Terminal 1 — Localization & Nav2:**
+The VM side includes a fully automated 1-command bringup script modeled after `auto_nav_bringup.sh`:
+
+#### Recommended: Automated 1-Command Bringup
+Open **one terminal** in the Ubuntu VM:
+```bash
+cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
+chmod +x auto_bringup.sh
+./auto_bringup.sh
+```
+
+**What this script does automatically (with live status & 300s timeout per step):**
+1. **[1/7] Environment & Stale Node Cleanup**: Sources ROS 2 Humble & workspace, clears lingering FastDDS shared memory, and cleanly terminates leftover nodes.
+2. **[2/7] Hardware Connectivity Verification**: Checks that `/odom` and `/scan` are being actively published by the TurtleBot 4 / Create 3 base.
+3. **[3/7] Localization Bringup**: Launches `map_server` and AMCL with `final_room.yaml` and `localization_params.yaml`.
+4. **[4/7] Nav2 Navigation Stack**: Launches the Nav2 planners, costmaps, and behavior tree navigator with `nav2_params.yaml`.
+5. **[5/7] RViz2 Visualization**: Launches RViz2 with software rendering (`LIBGL_ALWAYS_SOFTWARE=1`) so you can inspect the map and robot.
+6. **[6/7] Manual Initial Pose Confirmation**:
+   - In RViz, click **2D Pose Estimate** on the top toolbar.
+   - Click the robot's real position on the map and drag along its facing heading until the red laser scans align with the map walls.
+   - Return to the terminal; the script reads `/amcl_pose` and prompts: `Is the robot correctly localized on the map? [y/N]`. Type `y` and press `Enter` to confirm.
+7. **[7/7] Robot Controller Launch**: Launches `robot_controller.py` with unbuffered output, verifies the HTTP command server binds (port 8070), checks connection to the Nav2 `/navigate_to_pose` action server, and begins streaming live logs.
+
+Press `Ctrl+C` at any time to cleanly stop all nodes and the controller.
+
+---
+
+#### Alternative: Manual / Separate Bringup
+If you prefer running components in separate terminals or Nav2 is already running:
+
+**Terminal 1 — Localization:**
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/turtlebot4_ws/install/setup.bash
@@ -118,18 +146,27 @@ ros2 launch turtlebot4_navigation localization.launch.py \
     params:=$HOME/Robot-Needs-Vision/Stage2/vm_map_tools/maps/localization_params.yaml
 ```
 
-**Terminal 2 — Nav2 Navigation:**
+**Terminal 2 — Nav2:**
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/turtlebot4_ws/install/setup.bash
 
-ros2 launch turtlebot4_navigation nav2.launch.py
+ros2 launch turtlebot4_navigation nav2.launch.py \
+    params_file:=$HOME/Robot-Needs-Vision/Stage2/vm_map_tools/maps/nav2_params.yaml
 ```
 
-**Terminal 3 — Stage 2 Robot Controller:**
+**Terminal 3 — RViz2:**
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 ros2 launch turtlebot4_viz view_robot.launch.py
+```
+*(Use 2D Pose Estimate in RViz to set the initial pose)*
+
+**Terminal 4 — Stage 2 Robot Controller:**
 ```bash
 cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
 ./start_robot_controller.sh
+# Or using the bringup script in controller-only mode:
+# ./auto_bringup.sh --controller-only
 ```
 
 ---

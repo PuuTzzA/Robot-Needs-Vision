@@ -3,14 +3,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STAGE2_MAPS="${SCRIPT_DIR}/../vm_map_tools/maps"
+STAGE2_MAPS="$(cd "${SCRIPT_DIR}/../../vm_map_tools/maps" 2>/dev/null && pwd)"
 
 echo "====================================================================="
 echo " TurtleBot 4 Stage 2 Robot Controller Bringup"
 echo "====================================================================="
 
-# Clean stale FastDDS shared memory
-rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
+# NOTE: Do NOT rm /dev/shm/fastrtps_* here — Nav2/AMCL are already running and
+# deleting shared memory files corrupts their active DDS transports.
 
 # Source ROS 2 environment
 if [ -f /opt/ros/humble/setup.bash ]; then
@@ -28,7 +28,7 @@ echo "Detected Network IPs:"
 hostname -I || true
 echo ""
 
-exec python3 "${SCRIPT_DIR}/robot_controller.py" \
+exec python3 -u "${SCRIPT_DIR}/robot_controller.py" \
     --map "${STAGE2_MAPS}/final_room.yaml" \
     --points "${STAGE2_MAPS}/stage2_keypoints.json" \
     "$@"
