@@ -97,6 +97,7 @@ class CameraManager:
         self._latest_left: Optional[np.ndarray] = None
         self._latest_right: Optional[np.ndarray] = None
         self._frame_id = 0
+        self._last_frame_at = 0.0
         self._fps = 0.0
         self._fps_count = 0
         self._fps_timer = time.perf_counter()
@@ -207,6 +208,7 @@ class CameraManager:
                 self._latest_left = left_f
                 self._latest_right = right_f
                 self._frame_id += 1
+                self._last_frame_at = time.monotonic()
                 self._fps_count += 1
                 dt = now - self._fps_timer
                 if dt >= 1.0:
@@ -224,6 +226,14 @@ class CameraManager:
             l = self._latest_left.copy() if self._latest_left is not None else None
             r = self._latest_right.copy() if self._latest_right is not None else None
             return l, r, self._fps
+
+    def snapshot_left_frame(self, max_age_s: float = 2.0) -> Optional[np.ndarray]:
+        """Copy a recent single/left frame for manual analysis; reject stopped/stale feeds."""
+        with self._lock:
+            if (not self._running or self._latest_left is None
+                    or time.monotonic() - self._last_frame_at > max_age_s):
+                return None
+            return self._latest_left.copy()
 
     def snapshot_left_jpeg(self, quality: int = 85) -> Optional[bytes]:
         """Return JPEG bytes of current left frame."""
