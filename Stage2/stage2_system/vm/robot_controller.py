@@ -38,6 +38,7 @@ from typing import Any, Optional
 try:
     import rclpy
     from rclpy.action import ActionClient
+    from rclpy.executors import SingleThreadedExecutor
     from rclpy.node import Node
     from action_msgs.msg import GoalStatus
     from geometry_msgs.msg import PoseStamped, Twist
@@ -201,6 +202,7 @@ class RobotController:
 
         # ROS 2 Node components
         self.node = None
+        self.executor = None
         self.tf_buffer = None
         self.tf_listener = None
         self.nav_client = None
@@ -221,6 +223,8 @@ class RobotController:
         self._beacon_sock = None
         self._beacon_thread = None
         self._ping_thread = None
+        self._exec_thread = None
+        self._tick_thread = None
 
     def _init_ros2(self) -> None:
         rclpy.init()
@@ -229,22 +233,40 @@ class RobotController:
         self.tf_listener = TransformListener(self.tf_buffer, self.node)
         self.nav_client = ActionClient(self.node, NavigateToPose, "/navigate_to_pose")
         self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
+        self.executor = SingleThreadedExecutor()
+        self.executor.add_node(self.node)
         print("[RobotController] ROS 2 Humble node and Nav2 ActionClient initialized.")
 
     def start(self) -> None:
         self._start_http_server()
         self._start_udp_beacon()
         self._start_status_pusher()
-        self._start_spin_thread()
+        self._start_ros_executor()
+        self._start_tick_thread()
 
-    def _start_spin_thread(self) -> None:
-        def spin_loop():
+    def _start_ros_executor(self) -> None:
+        """Run dedicated ROS 2 executor to process callbacks instantly without throttled sleeps."""
+        if self.sim_mode or not self.executor:
+            return
+
+        def exec_loop():
+            try:
+                self.executor.spin()
+            except Exception:
+                pass
+
+        self._exec_thread = threading.Thread(target=exec_loop, daemon=True)
+        self._exec_thread.start()
+
+    def _start_tick_thread(self) -> None:
+        """Periodic logic loop (~25 Hz) for teleop timeout watchdog and simulation integration."""
+        def tick_loop():
             while self._running:
-                self.spin_tick()
+                self.tick_step()
                 time.sleep(0.04)
 
-        self._spin_thread = threading.Thread(target=spin_loop, daemon=True)
-        self._spin_thread.start()
+        self._tick_thread = threading.Thread(target=tick_loop, daemon=True)
+        self._tick_thread.start()
 
     def _start_http_server(self) -> None:
         for port in [self.cmd_port, 8075, 8076]:
@@ -488,8 +510,8 @@ class RobotController:
 
         return True
 
-    def spin_tick(self) -> None:
-        """Call periodically (10-20 Hz) in main loop."""
+    def tick_step(self) -> None:
+        """Periodic logic tick (teleop watchdog, kinematic simulation) at ~25 Hz."""
         # 1. Update Teleop Twist
         if self.teleop_active:
             if time.time() > self._teleop_end_time:
@@ -502,9 +524,9 @@ class RobotController:
         if self.sim_mode:
             self._update_sim_step()
 
-        # 3. Spin ROS 2 events
-        if not self.sim_mode and self.node:
-            rclpy.spin_once(self.node, timeout_sec=0.02)
+    def spin_tick(self) -> None:
+        """Backward-compatible alias for tick_step."""
+        self.tick_step()
 
     def _update_sim_step(self) -> None:
         dt = 0.05
@@ -546,10 +568,21 @@ class RobotController:
                 self._server.server_close()
             except Exception:
                 pass
+        if self.executor:
+            try:
+                self.executor.shutdown()
+            except Exception:
+                pass
         if self.node and ROS_AVAILABLE:
-            self.node.destroy_node()
+            try:
+                self.node.destroy_node()
+            except Exception:
+                pass
             if rclpy.ok():
-                rclpy.shutdown()
+                try:
+                    rclpy.shutdown()
+                except Exception:
+                    pass
 
 
 def main() -> None:

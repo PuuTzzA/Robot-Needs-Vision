@@ -201,11 +201,21 @@ if [ -f "${HOME}/turtlebot4_ws/install/setup.bash" ]; then
 fi
 
 export CYCLONEDDS_URI=/etc/turtlebot4/cyclonedds_rpi.xml
-if [ -f /etc/turtlebot4/fastdds_rpi.xml ]; then
+TUNED_FASTDDS="${SCRIPT_DIR}/fastdds_tuning.xml"
+if [ -f "${TUNED_FASTDDS}" ]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${TUNED_FASTDDS}"
+    export FASTDDS_DEFAULT_PROFILES_FILE="${TUNED_FASTDDS}"
+    export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+elif [ -f /etc/turtlebot4/fastdds_rpi.xml ]; then
     export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/turtlebot4/fastdds_rpi.xml
 fi
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+
+# Optional: Attempt non-blocking NTP clock resync with Create 3 base if present
+if curl --connect-timeout 0.5 -s -X POST http://192.168.186.2/api/restart-ntpd >/dev/null 2>&1; then
+    echo -e "  • Create 3 NTP Sync:  ${GREEN}Triggered successfully${NC}"
+fi
 
 VM_IPS=$(hostname -I 2>/dev/null || echo "127.0.0.1")
 echo -e "  • ROS_DOMAIN_ID:      ${GREEN}${ROS_DOMAIN_ID}${NC}"

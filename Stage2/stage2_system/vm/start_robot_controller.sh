@@ -28,7 +28,12 @@ if [ -f "${HOME}/turtlebot4_ws/install/setup.bash" ]; then
 fi
 
 export CYCLONEDDS_URI=/etc/turtlebot4/cyclonedds_rpi.xml
-if [ -f /etc/turtlebot4/fastdds_rpi.xml ]; then
+TUNED_FASTDDS="${SCRIPT_DIR}/fastdds_tuning.xml"
+if [ -f "${TUNED_FASTDDS}" ]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${TUNED_FASTDDS}"
+    export FASTDDS_DEFAULT_PROFILES_FILE="${TUNED_FASTDDS}"
+    export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+elif [ -f /etc/turtlebot4/fastdds_rpi.xml ]; then
     export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/turtlebot4/fastdds_rpi.xml
 fi
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
