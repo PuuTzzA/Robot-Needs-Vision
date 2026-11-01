@@ -75,13 +75,13 @@ The architecture coordinates three separate execution nodes communicating over l
    - Navigates to the closest entry, settles ~1.0s, takes a fresh photo, classifies the object, and overlays the result on **Last Processed Frame**.
    - **Early Exit**: as soon as both categories are discovered, immediately stops searching, publishes the solution, and navigates back to the initial RViz **Start** pose.
 
-### Level 3: Async GPU Measurement & One-Shot Multimodal Reasoning
-1. Robot moves to **Point 0**, settles ~1.0s, and captures `task_level3.jpg` (**no initial LLM API call**).
-2. Visits **all** object locations in greedy closest-Euclidean-distance order (no visibility filtering):
-   - Settles ~1.0s and captures a fresh synchronized stereo pair.
-   - Submits the lossless stereo composite PNG **asynchronously** to the SSH GPU Size Server (for YOLO bounding box, class, and metric stereo height) while **immediately driving to the next point** (or driving back to **Start** after the final photo).
-   - Overlays each returning GPU bounding box + class + height onto **Last Processed Frame**.
-3. Executes a single end-of-run multimodal LLM query (`solve_level3`) with `task_level3.jpg`, all object photos, and all GPU estimates to transcribe the task, synthesize the inventory, and output the final answer while returning to **Start**.
+### Level 3: Async Legibility Check, Stereo GPU Depth Overlay & One-Shot Reasoning
+1. Robot moves to **Point 0**, settles ~1.0s, captures `task_level3.jpg`, and launches an **asynchronous** LLM legibility check (`check_level3_legibility`) while immediately proceeding to the object points.
+   - If the question is not legible, the robot returns to **Point 0** once to capture `task_level3_retake.jpg` (without re-checking legibility) and continues.
+2. Visits **all** object locations in greedy closest-Euclidean-distance order (with automatic retry/detour if a keypoint fails or times out after 60s total / 10s without movement):
+   - Immediately displays the captured raw picture (`point_X.jpg`) in **Last Processed Frame**, then sends the lossless stereo pair asynchronously to the SSH GPU Size Server while driving to the next point.
+   - When the GPU response returns, replaces the preview with `measured_X.jpg` showing the **estimated depth/disparity map** with the bounding box and estimated size above it.
+3. Executes a single end-of-run multimodal LLM query (`solve_level3`) to output a **complete sentence** answer naming the relevant objects and point locations while returning to **Start**.
 
 ---
 

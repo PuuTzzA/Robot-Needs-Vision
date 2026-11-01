@@ -62,6 +62,7 @@ class MissionControlGUI:
         self._last_manual_frame: Optional[tuple[np.ndarray, str]] = None
         self._last_rendered_proc_key: Optional[tuple[int, int, int]] = None
         self._last_console_text: str = ""
+        self._last_observed_failed_goal_seq: int = -1
 
         # Image cache to prevent garbage collection
         self._img_left: Optional[ImageTk.PhotoImage] = None
@@ -473,15 +474,47 @@ class MissionControlGUI:
                     self.m.set_processed_frame(overlaid, f"classified_{raw_name}")
         self.btn_level_results.config(state="disabled" if self.manual_capture.busy else "normal")
 
-        # 1. Update Status & Headers
-        self.lbl_status.config(text=f"Status: {self.m.status_text}")
+        # 1. Surface standalone VM navigation failures & Update Status / Headers
+        st = self.m.robot.latest_status
+        nav_failed = bool(self.m.robot.is_connected and getattr(st, "nav_state", "") == "failed")
+        if (
+            nav_failed
+            and isinstance(getattr(st, "goal_seq", None), int)
+            and not self.m.is_running()
+            and st.goal_seq != getattr(self, "_last_observed_failed_goal_seq", -1)
+        ):
+            self._last_observed_failed_goal_seq = st.goal_seq
+            goal_lbl = getattr(st, "goal_name", "") or "goal"
+            detail_lbl = getattr(st, "nav_message", "") or "navigation failed"
+            self.m.set_status(f"Failed to get to {goal_lbl}: {detail_lbl}")
+
+        status_str = str(self.m.status_text)
+        is_fail_status = status_str.lower().startswith(("failed", "error"))
+        self.lbl_status.config(
+            text=f"Status: {status_str}",
+            fg="#991b1b" if is_fail_status else "#111827",
+        )
         lvl_str = f"Level: {self.m.current_level}" if self.m.current_level > 0 else "Level: -"
         self.lbl_level.config(text=lvl_str)
-        self.lbl_extra_info.config(text=self.m.extra_info or "Standing by")
+        if isinstance(self.m.extra_info, str):
+            extra_raw = self.m.extra_info or "Standing by"
+            extra_disp = (extra_raw[:65] + "...") if len(extra_raw) > 68 else extra_raw
+        else:
+            extra_disp = self.m.extra_info or "Standing by"
+        self.lbl_extra_info.config(text=extra_disp)
 
-        # 2. Update Robot Connection Banner
+        # 2. Update Robot Connection Banner (including VM failed state)
         if self.m.robot.is_connected:
-            self.lbl_robot_conn.config(text=f"Connected ({self.m.robot.active_vm_ip})", fg="#22c55e")
+            if nav_failed:
+                goal_lbl = getattr(st, "goal_name", "") or "goal"
+                nav_msg = getattr(st, "nav_message", "") or "failed"
+                short_msg = (nav_msg[:36] + "...") if len(nav_msg) > 39 else nav_msg
+                self.lbl_robot_conn.config(
+                    text=f"Connected ({self.m.robot.active_vm_ip}) - FAILED ({goal_lbl}: {short_msg})",
+                    fg="#f87171",
+                )
+            else:
+                self.lbl_robot_conn.config(text=f"Connected ({self.m.robot.active_vm_ip})", fg="#22c55e")
         else:
             self.lbl_robot_conn.config(text="Disconnected (Searching...)", fg="#ef4444")
 
@@ -530,9 +563,17 @@ class MissionControlGUI:
         self._render_frame_to_label(right_f, self.canvas_right_cam, "_img_right")
 
         # 5. Update Last Processed Frame (re-render only when frame or panel size changes)
-        if self.m.last_processed_frame is not None:
-            self.lbl_proc_hdr.config(text=f"Last Processed Frame: {self.m.last_processed_name}")
+        proc_getter = getattr(self.m, "get_processed_frame", None)
+        proc_bundle = proc_getter() if callable(proc_getter) else None
+        if isinstance(proc_bundle, tuple) and len(proc_bundle) == 3:
+            proc_frame, proc_name, proc_seq = proc_bundle
+        else:
+            proc_frame = self.m.last_processed_frame
+            proc_name = self.m.last_processed_name
             proc_seq = getattr(self.m, "processed_frame_seq", None)
+
+        if proc_frame is not None:
+            self.lbl_proc_hdr.config(text=f"Last Processed Frame: {proc_name}")
             if isinstance(proc_seq, int):
                 try:
                     pw = int(self.canvas_proc.winfo_width())
@@ -542,9 +583,9 @@ class MissionControlGUI:
                 render_key = (proc_seq, pw, ph)
                 if render_key != getattr(self, "_last_rendered_proc_key", None):
                     self._last_rendered_proc_key = render_key
-                    self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed")
+                    self._render_frame_to_label(proc_frame, self.canvas_proc, "_img_processed")
             else:
-                self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed")
+                self._render_frame_to_label(proc_frame, self.canvas_proc, "_img_processed")
 
         # 6. Update Map View
         try:

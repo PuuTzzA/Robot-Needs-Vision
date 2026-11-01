@@ -44,6 +44,17 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(restored.yaw_deg, 90.0)
         self.assertEqual(restored.goal_name, "B")
 
+        failed_status = RobotStatus(
+            localized=True,
+            nav_state="failed",
+            nav_message="Navigation stuck (no movement for 10s)",
+            goal_seq=3,
+            goal_name="A",
+        )
+        restored_fail = RobotStatus.from_dict(failed_status.to_dict())
+        self.assertEqual(restored_fail.nav_state, "failed")
+        self.assertEqual(restored_fail.nav_message, "Navigation stuck (no movement for 10s)")
+
     def test_goto_and_teleop_request(self):
         goto = GotoRequest(keypoint_id=5)
         self.assertEqual(goto.to_dict()["keypoint_id"], 5)

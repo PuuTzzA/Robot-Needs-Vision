@@ -150,17 +150,27 @@ class CommandDispatcher:
 
             elif cmd == "MEASURE":
                 hint = args[0] if args else None
-                _left_jpg, left_arr, composite_png = self.m.camera.capture_fresh_stereo(timeout_s=3.0, quality=90)
+                left_arr, right_arr = self.m.camera.capture_fresh_stereo_frames(timeout_s=3.0)
+                ts = time.strftime("%H%M%S")
+                if left_arr is not None:
+                    self.m.set_processed_frame(left_arr, f"measure_capture_{ts}.jpg")
+
+                composite_png: bytes | None = None
+                if left_arr is not None and right_arr is not None:
+                    if left_arr.shape[:2] != right_arr.shape[:2]:
+                        right_arr = cv2.resize(right_arr, (left_arr.shape[1], left_arr.shape[0]))
+                    ok_png, png_buf = cv2.imencode(".png", np.hstack((left_arr, right_arr)))
+                    if ok_png:
+                        composite_png = png_buf.tobytes()
+
                 if not composite_png:
                     composite_png = self.m.camera.snapshot_stereo_composite_png()
                     if left_arr is None:
                         left_arr, _, _ = self.m.camera.get_latest_pair()
+                        if left_arr is not None:
+                            self.m.set_processed_frame(left_arr, f"measure_capture_{ts}.jpg")
                 if not composite_png:
                     return "[ERROR] Could not capture stereo pair from camera."
-
-                ts = time.strftime("%H%M%S")
-                if left_arr is not None:
-                    self.m.set_processed_frame(left_arr, f"measure_capture_{ts}.jpg")
 
                 res = self.m.size_link.measure(composite_png, hint_class=hint)
                 if left_arr is not None:
@@ -210,9 +220,10 @@ class CommandDispatcher:
                 st = self.m.robot.latest_status
                 c_status = "Connected" if self.m.robot.is_connected else "Disconnected"
                 health = self.m.camera.get_camera_health()
+                nav_msg_suffix = f", Detail: {st.nav_message}" if st.nav_message else ""
                 lines = [
                     f"Robot Status:     {c_status} (Pose: X={st.x:.2f}m, Y={st.y:.2f}m, Yaw={st.yaw_deg:.1f}°, Home={'Yes' if st.has_home_pose else 'Auto'})",
-                    f"Nav2 State:       {st.nav_state} (Goal Seq: {st.goal_seq}, Target: {st.goal_name or '-'})",
+                    f"Nav2 State:       {st.nav_state} (Goal Seq: {st.goal_seq}, Target: {st.goal_name or '-'}{nav_msg_suffix})",
                     f"Camera Health:    Left={health['left_state']} ({health['left_fps']:.1f} fps) | Right={health['right_state']} ({health['right_fps']:.1f} fps) | Reopens={health['reopen_count']}",
                     f"Mission Manager:  {self.m.status_text} (Level: {self.m.current_level})",
                     f"Keypoints Loaded: {len(self.m.keypoints.get_all())} entries",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import math
 from pathlib import Path
 import re
 import socket
@@ -312,27 +313,73 @@ class RobotLink:
         self,
         goal_seq: int,
         timeout: float = 60.0,
+        stuck_timeout: Optional[float] = 10.0,
+        stuck_min_move_m: float = 0.05,
         cancel_event: Optional[threading.Event] = None,
     ) -> Tuple[bool, str]:
-        """Block until target goal_seq finishes or times out."""
-        t_end = time.time() + timeout
+        """Block until target goal_seq finishes, gets stuck without moving, or times out."""
+        start_mono = time.monotonic()
+        deadline = start_mono + max(0.05, float(timeout))
+        last_move_mono = start_mono
+        last_pose: Optional[tuple[float, float, float]] = None
 
-        while time.time() < t_end:
+        with self._lock:
+            init_st = self.latest_status
+            if init_st.localized and init_st.goal_seq == goal_seq:
+                last_pose = (init_st.x, init_st.y, init_st.yaw_deg)
+
+        while True:
             if cancel_event and cancel_event.is_set():
                 self.cancel_navigation()
                 return False, "Canceled by user"
 
+            now_mono = time.monotonic()
             with self._lock:
                 st = self.latest_status
-                if st.goal_seq == goal_seq:
+                if st.goal_seq != goal_seq:
+                    # Target goal has not yet been reflected in the status stream; keep timer fresh
+                    last_move_mono = now_mono
+                    last_pose = None
+                else:
                     if st.nav_state == "succeeded":
                         return True, "Reached destination"
-                    elif st.nav_state in ("aborted", "canceled", "rejected"):
-                        return False, f"Navigation {st.nav_state}"
+                    elif st.nav_state in ("failed", "aborted", "canceled", "rejected"):
+                        reason = st.nav_message or f"Navigation {st.nav_state}"
+                        return False, reason
 
-            time.sleep(0.1)
+                    if st.localized:
+                        if last_pose is None:
+                            last_pose = (st.x, st.y, st.yaw_deg)
+                            last_move_mono = now_mono
+                        else:
+                            moved = math.hypot(st.x - last_pose[0], st.y - last_pose[1])
+                            if moved >= stuck_min_move_m:
+                                last_pose = (st.x, st.y, st.yaw_deg)
+                                last_move_mono = now_mono
 
-        return False, f"Timed out after {timeout:.0f}s"
+            if (
+                stuck_timeout is not None
+                and stuck_timeout > 0.0
+                and (now_mono - last_move_mono) >= (stuck_timeout + 0.35)
+            ):
+                self.cancel_navigation()
+                msg = f"Stuck (not moving for {stuck_timeout:.0f}s)"
+                with self._lock:
+                    if self.latest_status.goal_seq == goal_seq:
+                        self.latest_status.nav_state = "failed"
+                        self.latest_status.nav_message = msg
+                return False, msg
+
+            if now_mono >= deadline:
+                self.cancel_navigation()
+                msg = f"Timed out after {timeout:.0f}s"
+                with self._lock:
+                    if self.latest_status.goal_seq == goal_seq:
+                        self.latest_status.nav_state = "failed"
+                        self.latest_status.nav_message = msg
+                return False, msg
+
+            time.sleep(0.08)
 
     # -------------------------------------------------------------------------
     # HTTP Transport Helpers

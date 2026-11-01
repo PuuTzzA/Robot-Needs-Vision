@@ -10,14 +10,14 @@ from .prompts import (
     KNOWN_OBJECT_CATEGORIES,
     LEVEL1_TASK_PROMPT,
     LEVEL2_TASK_PROMPT,
+    LEVEL3_LEGIBILITY_PROMPT,
     LEVEL3_SOLVE_PROMPT_TEMPLATE,
-    LEVEL3_TASK_INFO_PROMPT,
 )
 from .schemas import (
     Categories,
     Category,
     Level3Solution,
-    Level3TaskInfo,
+    TaskLegibility,
     Waypoints,
 )
 
@@ -65,22 +65,22 @@ def parse_level2_task(task_photo_bytes: bytes) -> list[str]:
     return [cat.category.strip() for cat in res.categories if cat.category.strip()]
 
 
-def parse_level3_task(task_photo_bytes: bytes) -> Level3TaskInfo:
-    """Parse Level 3 instructions photo to extract task text and whether high-visibility size estimation is needed."""
+def check_level3_legibility(task_photo_bytes: bytes) -> TaskLegibility:
+    """Check asynchronously whether the photographed Level 3 question at Point 0 is clearly legible."""
     images = [LabeledImage(label="photo_task_laptop", jpeg_bytes=task_photo_bytes)]
-    res: Level3TaskInfo = query_structured(
-        prompt=LEVEL3_TASK_INFO_PROMPT,
+    res: TaskLegibility = query_structured(
+        prompt=LEVEL3_LEGIBILITY_PROMPT,
         images=images,
-        response_model=Level3TaskInfo,
+        response_model=TaskLegibility,
     )
     return res
 
 
 def solve_level3(
     task_photo_bytes: bytes,
-    task_info: Optional[Level3TaskInfo] = None,
     point_photos: Optional[dict[str, bytes]] = None,
     sensor_estimates: Optional[dict[str, Optional[dict]]] = None,
+    transcribed_task: Optional[str] = None,
 ) -> Level3Solution:
     """Synthesize complete Level 3 solution in one shot from task photo, point photos, and GPU estimates."""
     point_photos = point_photos or {}
@@ -109,8 +109,8 @@ def solve_level3(
 
     estimates_str = "\n".join(est_lines) if est_lines else "- None"
 
-    if task_info is not None and task_info.task_description.strip():
-        task_context = f'Task Instruction displayed on screen:\n"{task_info.task_description}"'
+    if transcribed_task is not None and transcribed_task.strip():
+        task_context = f'Task Instruction displayed on screen:\n"{transcribed_task.strip()}"'
     else:
         task_context = (
             "Task Instruction: Read and transcribe verbatim directly from the first attached image "

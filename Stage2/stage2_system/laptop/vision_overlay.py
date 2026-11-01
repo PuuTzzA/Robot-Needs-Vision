@@ -105,7 +105,7 @@ def draw_text_result_overlay(
 
 
 def _draw_local_detection_box(img: np.ndarray, det: DetectionItem, is_primary: bool) -> None:
-    """Draw bounding box and class/height tag when GPU server did not attach annotated JPEG."""
+    """Draw high-contrast bounding box and estimated size label directly above the box."""
     if len(det.bbox_px) != 4:
         return
     h, w = img.shape[:2]
@@ -117,19 +117,55 @@ def _draw_local_detection_box(img: np.ndarray, det: DetectionItem, is_primary: b
     if x2 <= x1 or y2 <= y1:
         return
 
-    color = (0, 230, 90) if is_primary else (0, 180, 255)
-    thickness = max(2, int(round(h / 240.0)))
+    color = (90, 255, 130) if is_primary else (0, 215, 255)
+    thickness = max(2, int(round(h / 230.0)))
+    # Double-stroke outline so bounding box pops cleanly over Turbo/Magma depth colormaps
+    cv2.rectangle(img, (x1, y1), (x2, y2), (12, 16, 22), thickness + 2)
     cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
 
-    h_part = f" {det.height_cm:.1f}cm" if det.height_cm is not None else ""
-    tag = f"{det.class_name}{h_part} ({det.confidence:.2f})"
+    size_parts = []
+    if det.height_cm is not None:
+        size_parts.append(f"H: {det.height_cm:.1f}cm")
+    if det.width_cm is not None:
+        size_parts.append(f"W: {det.width_cm:.1f}cm")
+    if det.distance_m is not None:
+        size_parts.append(f"Z: {det.distance_m:.2f}m")
+
+    size_str = " ".join(size_parts)
+    tag = f"{det.class_name} | {size_str}" if size_str else f"{det.class_name} ({det.confidence:.2f})"
+
     font = cv2.FONT_HERSHEY_SIMPLEX
-    f_scale = max(0.5, min(1.1, h / 720.0))
+    f_scale = max(0.5, min(1.05, h / 700.0))
     f_thick = max(1, int(round(f_scale * 2.0)))
     (tw, th), base = cv2.getTextSize(tag, font, f_scale, f_thick)
-    ty1 = max(th + base + 8, y1)
-    cv2.rectangle(img, (x1, ty1 - th - base - 8), (min(w, x1 + tw + 12), ty1), color, -1)
-    cv2.putText(img, tag, (x1 + 6, ty1 - base - 4), font, f_scale, (15, 18, 22), f_thick, cv2.LINE_AA)
+    pad_h = th + base + 10
+    pad_w = tw + 12
+
+    bx1 = max(4, min(max(4, w - pad_w - 4), x1))
+    by2 = y1 - 4
+    if by2 - pad_h < 4:
+        by1 = 4
+        by2 = min(h - 4, 4 + pad_h)
+    else:
+        by1 = by2 - pad_h
+
+    cv2.rectangle(img, (bx1, by1), (min(w - 2, bx1 + pad_w), by2), (15, 18, 24), -1)
+    cv2.rectangle(img, (bx1, by1), (min(w - 2, bx1 + pad_w), by2), color, 1)
+    cv2.putText(img, tag, (bx1 + 6, by2 - base - 4), font, f_scale, color, f_thick, cv2.LINE_AA)
+
+
+def _decode_b64_jpeg(b64_str: Optional[str]) -> Optional[np.ndarray]:
+    if not b64_str:
+        return None
+    try:
+        jpg_bytes = base64.b64decode(b64_str)
+        arr = np.frombuffer(jpg_bytes, dtype=np.uint8)
+        decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if decoded is not None and decoded.size > 0:
+            return decoded
+    except Exception:
+        pass
+    return None
 
 
 def draw_measurement_overlay(
@@ -137,20 +173,26 @@ def draw_measurement_overlay(
     meas: MeasurementResult,
     point_name: Optional[str] = None,
 ) -> np.ndarray:
-    """Build annotated preview frame for a stereo GPU MeasurementResult."""
-    base_img: Optional[np.ndarray] = None
-    if meas.annotated_jpeg_b64:
-        try:
-            jpg_bytes = base64.b64decode(meas.annotated_jpeg_b64)
-            arr = np.frombuffer(jpg_bytes, dtype=np.uint8)
-            decoded = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if decoded is not None and decoded.size > 0:
-                base_img = decoded
-        except Exception:
-            base_img = None
+    """Build annotated disparity/depth map preview frame with bounding box and estimated size above it."""
+    depth_img = _decode_b64_jpeg(meas.depth_jpeg_b64)
+    ann_img = _decode_b64_jpeg(meas.annotated_jpeg_b64) if depth_img is None else None
 
-    if base_img is None:
+    need_local_boxes = False
+    if depth_img is not None:
+        base_img = depth_img
+        need_local_boxes = True
+    elif ann_img is not None:
+        base_img = ann_img
+        need_local_boxes = False
+    elif meas.ok and raw_frame.size > 0:
+        gray = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY) if raw_frame.ndim == 3 else raw_frame
+        base_img = cv2.applyColorMap(gray, cv2.COLORMAP_TURBO)
+        need_local_boxes = True
+    else:
         base_img = raw_frame.copy()
+        need_local_boxes = True
+
+    if need_local_boxes:
         dets = list(meas.detections)
         if not dets and meas.primary is not None:
             dets = [meas.primary]
@@ -163,7 +205,8 @@ def draw_measurement_overlay(
         p = meas.primary
         h_str = f"H: {p.height_cm:.1f} cm" if p.height_cm is not None else "H: n/a"
         w_str = f" | W: {p.width_cm:.1f} cm" if p.width_cm is not None else ""
-        summary = f"{p.class_name} ({h_str}{w_str})"
+        z_str = f" | Z: {p.distance_m:.2f} m" if p.distance_m is not None else ""
+        summary = f"{p.class_name} ({h_str}{w_str}{z_str})"
         accent = (80, 235, 130)
     elif meas.ok:
         summary = "No object detected"
@@ -177,9 +220,9 @@ def draw_measurement_overlay(
 
     return _draw_banner_card(
         base_img,
-        header=f"{prefix} - GPU Size & Class Estimate",
+        header=f"{prefix} - Estimated Depth & Size",
         main_line=summary,
         accent_bgr=accent,
-        position="top",
+        position="bottom",
     )
 

@@ -721,16 +721,14 @@ class CameraManager:
 
         return None, None
 
-    def capture_fresh_stereo(
+    def capture_fresh_stereo_frames(
         self,
         min_after_mono: Optional[float] = None,
         timeout_s: float = 4.5,
-        quality: int = 90,
-    ) -> Tuple[Optional[bytes], Optional[np.ndarray], Optional[bytes]]:
-        """Wait for fresh post-settle Left and Right frames, returning (left_jpeg, left_bgr, stereo_png).
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Wait for fresh post-settle Left and Right BGR frames without image encoding overhead.
 
-        If Right camera fails recovery while Left succeeds, still returns (left_jpeg, left_bgr, None)
-        so visual inspection can proceed without losing the waypoint photo.
+        If Right camera fails recovery while Left succeeds, returns (best_left, None).
         """
         target_mono = min_after_mono if min_after_mono is not None else time.monotonic()
         deadline = time.monotonic() + max(0.2, timeout_s)
@@ -780,14 +778,7 @@ class CameraManager:
             if left_copy is not None and right_copy is not None:
                 if left_copy.shape[:2] != right_copy.shape[:2]:
                     right_copy = cv2.resize(right_copy, (left_copy.shape[1], left_copy.shape[0]))
-                ok_jpg, jpg_buf = cv2.imencode(".jpg", left_copy, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-                composite = np.hstack((left_copy, right_copy))
-                ok_png, png_buf = cv2.imencode(".png", composite)
-                return (
-                    jpg_buf.tobytes() if ok_jpg else None,
-                    left_copy if ok_jpg else None,
-                    png_buf.tobytes() if ok_png else None,
-                )
+                return left_copy, right_copy
 
             now_mono = time.monotonic()
             if now_mono >= deadline:
@@ -804,13 +795,41 @@ class CameraManager:
                         reopen_right_done = True
                         self._reopen_side("right", reason="capture_fresh_stereo right timeout", force=True)
 
-        # Graceful partial fallback: if Left succeeded post-settle, still return Left JPEG
         if best_left is not None:
-            ok_jpg, jpg_buf = cv2.imencode(".jpg", best_left, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-            if ok_jpg:
-                return jpg_buf.tobytes(), best_left, None
+            return best_left, None
 
-        return None, None, None
+        return None, None
+
+    def capture_fresh_stereo(
+        self,
+        min_after_mono: Optional[float] = None,
+        timeout_s: float = 4.5,
+        quality: int = 90,
+    ) -> Tuple[Optional[bytes], Optional[np.ndarray], Optional[bytes]]:
+        """Wait for fresh post-settle Left and Right frames, returning (left_jpeg, left_bgr, stereo_png).
+
+        If Right camera fails recovery while Left succeeds, still returns (left_jpeg, left_bgr, None)
+        so visual inspection can proceed without losing the waypoint photo.
+        """
+        left_copy, right_copy = self.capture_fresh_stereo_frames(
+            min_after_mono=min_after_mono,
+            timeout_s=timeout_s,
+        )
+        if left_copy is None:
+            return None, None, None
+
+        ok_jpg, jpg_buf = cv2.imencode(".jpg", left_copy, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if not ok_jpg:
+            return None, None, None
+
+        png_bytes: Optional[bytes] = None
+        if right_copy is not None:
+            composite = np.hstack((left_copy, right_copy))
+            ok_png, png_buf = cv2.imencode(".png", composite)
+            if ok_png:
+                png_bytes = png_buf.tobytes()
+
+        return jpg_buf.tobytes(), left_copy, png_bytes
 
     def stop(self) -> None:
         self._running = False

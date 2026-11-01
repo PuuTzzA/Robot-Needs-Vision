@@ -214,12 +214,18 @@ class RobotController:
         beacon_port: int = DEFAULT_VM_BEACON_PORT,
         sim_mode: bool = False,
         pose_confirmed: bool = True,
+        goal_timeout_s: float = 60.0,
+        stuck_timeout_s: float = 10.0,
+        stuck_min_move_m: float = 0.05,
     ) -> None:
         self.cmd_port = cmd_port
         self.beacon_port = beacon_port
         self.sim_mode = sim_mode or (not ROS_AVAILABLE)
         self.sim_speed = 3.0
         self.pose_confirmed = bool(pose_confirmed)
+        self.goal_timeout_s = float(goal_timeout_s)
+        self.stuck_timeout_s = float(stuck_timeout_s)
+        self.stuck_min_move_m = float(stuck_min_move_m)
 
         # In-place keypoint and map store
         self.keypoints = KeypointStore(file_path=points_path)
@@ -230,12 +236,20 @@ class RobotController:
         self.registered_laptop_port: int = DEFAULT_LAPTOP_PING_PORT
 
         # State tracking
+        self._state_lock = threading.Lock()
         self.goal_counter = 0
         self.active_goal_seq = 0
         self.active_keypoint_id: Optional[int] = None
         self.active_goal_name: Optional[str] = None
-        self.nav_state = "idle"  # idle | navigating | succeeded | aborted | canceled
+        self.nav_state = "idle"  # idle | navigating | succeeded | failed | aborted | canceled
+        self.nav_message = ""
         self.teleop_active = False
+
+        # Goal timeout & stuck detection tracking
+        self._goal_start_mono: float = 0.0
+        self._last_move_mono: float = 0.0
+        self._last_move_pose: Optional[tuple[float, float, float]] = None
+        self._active_target_xy: Optional[tuple[float, float]] = None
 
         # Simulation kinematic state
         self.sim_x = 0.0
@@ -399,30 +413,36 @@ class RobotController:
         self._beacon_thread = threading.Thread(target=beacon_loop, daemon=True)
         self._beacon_thread.start()
 
+    def _push_status_once(self) -> None:
+        if not self.registered_laptop_ip:
+            return
+        status = self.get_status()
+        payload = json.dumps(status.to_dict()).encode("utf-8")
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(
+                self.registered_laptop_ip, self.registered_laptop_port, timeout=0.8
+            )
+            headers = {"Content-Type": "application/json"}
+            conn.request("POST", "/api/robot_status", body=payload, headers=headers)
+            res = conn.getresponse()
+            res.read()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                conn.close()
+
+    def _push_status_async(self) -> None:
+        if not self.registered_laptop_ip:
+            return
+        threading.Thread(target=self._push_status_once, daemon=True).start()
+
     def _start_status_pusher(self) -> None:
         def push_loop() -> None:
             while self._running:
                 time.sleep(0.5)  # 2 Hz
-                if not self.registered_laptop_ip:
-                    continue
-
-                status = self.get_status()
-                payload = json.dumps(status.to_dict()).encode("utf-8")
-
-                conn = None
-                try:
-                    conn = http.client.HTTPConnection(
-                        self.registered_laptop_ip, self.registered_laptop_port, timeout=0.8
-                    )
-                    headers = {"Content-Type": "application/json"}
-                    conn.request("POST", "/api/robot_status", body=payload, headers=headers)
-                    res = conn.getresponse()
-                    res.read()
-                except Exception:
-                    pass
-                finally:
-                    if conn:
-                        conn.close()
+                self._push_status_once()
 
         self._ping_thread = threading.Thread(target=push_loop, daemon=True)
         self._ping_thread.start()
@@ -482,6 +502,7 @@ class RobotController:
             teleop_active=self.teleop_active,
             has_home_pose=(self.initial_pose is not None),
             keypoints_sha=self.keypoints.sha256,
+            nav_message=self.nav_message,
         )
 
     def get_map_payload(self) -> dict:
@@ -668,12 +689,20 @@ class RobotController:
 
         self._ensure_initial_pose_latched()
 
-        self.goal_counter += 1
-        seq = self.goal_counter
-        self.active_goal_seq = seq
-        self.active_keypoint_id = keypoint_id
-        self.active_goal_name = label
-        self.nav_state = "navigating"
+        now_mono = time.monotonic()
+        loc, rx, ry, ryaw = self.get_robot_pose()
+        with self._state_lock:
+            self.goal_counter += 1
+            seq = self.goal_counter
+            self.active_goal_seq = seq
+            self.active_keypoint_id = keypoint_id
+            self.active_goal_name = label
+            self.nav_state = "navigating"
+            self.nav_message = ""
+            self._goal_start_mono = now_mono
+            self._last_move_mono = now_mono
+            self._last_move_pose = (rx, ry, ryaw) if loc else None
+            self._active_target_xy = (float(x), float(y))
 
         print(f"[RobotController] Goal #{seq}: Navigating to {label} ({x:.2f}, {y:.2f}, {yaw_deg:.1f} deg)...")
 
@@ -682,7 +711,7 @@ class RobotController:
             return True, seq, "Goal dispatched (simulated)"
 
         if not self.nav_client.server_is_ready():
-            self.nav_state = "rejected"
+            self._fail_active_goal(seq, "Nav2 server not ready")
             return False, seq, "Nav2 server not ready"
 
         goal_msg = NavigateToPose.Goal()
@@ -743,47 +772,89 @@ class RobotController:
             keypoint_id=None,
         )
 
+    def _fail_active_goal(self, seq: int, reason: str) -> None:
+        """Mark active goal as failed, cancel underlying Nav2 action if running, and push failed status to UI."""
+        goal_handle_to_cancel = None
+        with self._state_lock:
+            if self.active_goal_seq != seq or self.nav_state not in ("navigating", "rejected"):
+                return
+            self.nav_state = "failed"
+            self.nav_message = reason
+            goal_label = self.active_goal_name or f"#{seq}"
+            if self.sim_mode:
+                self.sim_target_xy = None
+            else:
+                goal_handle_to_cancel = self.goal_handle
+
+        print(f"[RobotController] Goal #{seq} ({goal_label}) FAILED: {reason}")
+        if goal_handle_to_cancel is not None:
+            try:
+                goal_handle_to_cancel.cancel_goal_async()
+            except Exception:
+                pass
+        if not self.sim_mode and self.cmd_vel_pub:
+            try:
+                self.cmd_vel_pub.publish(Twist())
+            except Exception:
+                pass
+        self._push_status_async()
+
     def _on_goal_response(self, future, seq: int) -> None:
         try:
             self.goal_handle = future.result()
             if not self.goal_handle.accepted:
-                if self.active_goal_seq == seq:
-                    self.nav_state = "rejected"
+                self._fail_active_goal(seq, "Goal rejected by Nav2")
                 return
 
             res_future = self.goal_handle.get_result_async()
             res_future.add_done_callback(lambda f: self._on_goal_completed(f, seq))
         except Exception:
-            if self.active_goal_seq == seq:
-                self.nav_state = "aborted"
+            self._fail_active_goal(seq, "Goal dispatch failed")
 
     def _on_goal_completed(self, future, seq: int) -> None:
-        if self.active_goal_seq != seq:
-            return
+        with self._state_lock:
+            if self.active_goal_seq != seq or self.nav_state != "navigating":
+                return
         try:
             status = future.result().status
             if status == GoalStatus.STATUS_SUCCEEDED:
-                self.nav_state = "succeeded"
+                with self._state_lock:
+                    if self.active_goal_seq == seq and self.nav_state == "navigating":
+                        self.nav_state = "succeeded"
+                        self.nav_message = "Reached destination"
                 print(f"[RobotController] Goal #{seq} SUCCEEDED!")
+                self._push_status_async()
             elif status == GoalStatus.STATUS_CANCELED:
-                self.nav_state = "canceled"
+                with self._state_lock:
+                    if self.active_goal_seq == seq and self.nav_state == "navigating":
+                        self.nav_state = "canceled"
+                        self.nav_message = "Navigation canceled"
                 print(f"[RobotController] Goal #{seq} CANCELED.")
+                self._push_status_async()
             else:
-                self.nav_state = "aborted"
-                print(f"[RobotController] Goal #{seq} ABORTED.")
+                self._fail_active_goal(seq, "Nav2 failed to reach goal")
         except Exception:
-            self.nav_state = "aborted"
+            self._fail_active_goal(seq, "Nav2 goal execution error")
 
     def request_cancel(self) -> None:
         print("[RobotController] Canceling active navigation...")
-        if self.sim_mode:
-            self.sim_target_xy = None
-            self.nav_state = "canceled"
-            return
-
-        if self.goal_handle and self.nav_state == "navigating":
-            self.goal_handle.cancel_goal_async()
-        self.nav_state = "canceled"
+        goal_handle_to_cancel = None
+        with self._state_lock:
+            if self.sim_mode:
+                self.sim_target_xy = None
+                self.nav_state = "canceled"
+                self.nav_message = "Navigation canceled"
+            else:
+                if self.goal_handle and self.nav_state == "navigating":
+                    goal_handle_to_cancel = self.goal_handle
+                self.nav_state = "canceled"
+                self.nav_message = "Navigation canceled"
+        if goal_handle_to_cancel is not None:
+            try:
+                goal_handle_to_cancel.cancel_goal_async()
+            except Exception:
+                pass
+        self._push_status_async()
 
     def request_teleop(self, req: TeleopRequest) -> bool:
         lin_x = req.linear_x if req.linear_x is not None else 0.0
@@ -813,8 +884,55 @@ class RobotController:
 
         return True
 
+    def _check_navigation_timeouts(self) -> None:
+        """Enforce 60s total goal timeout and 10s no-movement stuck timeout while navigating."""
+        with self._state_lock:
+            if self.nav_state != "navigating":
+                return
+            seq = self.active_goal_seq
+            start_mono = self._goal_start_mono
+            last_move_mono = self._last_move_mono
+            last_pose = self._last_move_pose
+            target_xy = self._active_target_xy
+
+        now_mono = time.monotonic()
+
+        # 1. Total goal timeout (default 60s)
+        if self.goal_timeout_s > 0.0 and (now_mono - start_mono) >= self.goal_timeout_s:
+            self._fail_active_goal(seq, f"Timed out after {self.goal_timeout_s:.0f}s")
+            return
+
+        # 2. Stuck / no-movement timeout (default 10s; reset whenever robot moves)
+        loc, rx, ry, ryaw = self.get_robot_pose()
+        if not loc:
+            return
+
+        if last_pose is None:
+            with self._state_lock:
+                if self.active_goal_seq == seq and self.nav_state == "navigating":
+                    self._last_move_pose = (rx, ry, ryaw)
+                    self._last_move_mono = now_mono
+            return
+
+        ax, ay, ayaw = last_pose
+        moved_m = math.hypot(rx - ax, ry - ay)
+        near_goal = False
+        if target_xy is not None:
+            near_goal = math.hypot(target_xy[0] - rx, target_xy[1] - ry) <= 0.20
+        yaw_diff = abs((ryaw - ayaw + 180.0) % 360.0 - 180.0)
+
+        if moved_m >= self.stuck_min_move_m or (near_goal and yaw_diff >= 8.0):
+            with self._state_lock:
+                if self.active_goal_seq == seq and self.nav_state == "navigating":
+                    self._last_move_pose = (rx, ry, ryaw)
+                    self._last_move_mono = now_mono
+            return
+
+        if self.stuck_timeout_s > 0.0 and (now_mono - last_move_mono) >= self.stuck_timeout_s:
+            self._fail_active_goal(seq, f"Stuck (not moving for {self.stuck_timeout_s:.0f}s)")
+
     def tick_step(self) -> None:
-        """Periodic logic tick (teleop watchdog, kinematic simulation) at ~25 Hz."""
+        """Periodic logic tick (teleop watchdog, kinematic simulation, nav timeouts) at ~25 Hz."""
         # 1. Update Teleop Twist
         if self.teleop_active:
             if time.time() > self._teleop_end_time:
@@ -826,6 +944,9 @@ class RobotController:
         # 2. Update Kinematic Sim if active
         if self.sim_mode:
             self._update_sim_step()
+
+        # 3. Check navigation goal & stuck timeouts
+        self._check_navigation_timeouts()
 
     def spin_tick(self) -> None:
         """Backward-compatible alias for tick_step."""
@@ -861,7 +982,9 @@ class RobotController:
                 self.sim_yaw = tyaw
                 self.sim_target_xy = None
                 self.nav_state = "succeeded"
+                self.nav_message = "Reached destination"
                 print(f"[RobotController Sim] Reached destination for Goal #{self.active_goal_seq}!")
+                self._push_status_async()
 
     def stop(self) -> None:
         self._running = False

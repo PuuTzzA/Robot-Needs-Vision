@@ -17,7 +17,7 @@ from .schemas import (
     Category,
     InventoryItem,
     Level3Solution,
-    Level3TaskInfo,
+    TaskLegibility,
     Waypoint,
     Waypoints,
 )
@@ -209,16 +209,13 @@ def _mock_query_structured(
                 return Category(category="Apple", color="red", confidence=0.90)  # type: ignore
         return Category(category="Mug", color="blue", confidence=0.85)  # type: ignore
 
-    # 4. Level 3 Task Info
-    if response_model is Level3TaskInfo:
-        # Check if prompt or mock test mentions height
-        is_height_task = "tallest" in p_lower or "height" in p_lower or "measure" in p_lower
-        desc = (
-            "Where is the tallest object in the venue?"
-            if is_height_task
-            else "Please count how many objects in the venue have the same color as the object at point D."
-        )
-        return Level3TaskInfo(task_description=desc, use_high_visibility=is_height_task)  # type: ignore
+    # 4. Level 3 Task Legibility Check
+    if response_model is TaskLegibility:
+        return TaskLegibility(
+            legible=True,
+            transcribed_text="How many objects are taller than the object at point B?",
+            reason=None,
+        )  # type: ignore
 
     # 5. Level 3 Final Solution
     if response_model is Level3Solution:
@@ -228,13 +225,13 @@ def _mock_query_structured(
             InventoryItem(point="D", category="Bottle", color="blue", height_cm=31.5),
             InventoryItem(point="E", category="Banana", color="yellow", height_cm=16.0),
         ]
-        if "color" in p_lower:
-            ans = "There are 2 objects with the same color as Point D (blue): Point D and Point H."
-        else:
-            ans = "The tallest object in the venue is the 1.5L Bottle at Point D with a measured height of 31.5 cm."
+        ans = (
+            "2. The Bottle at point D (31.5 cm) and the Banana at point E (16.0 cm) "
+            "are taller than the Cup at point B (10.5 cm)."
+        )
 
         return Level3Solution(  # type: ignore
-            task_description="Evaluated from inspected locations.",
+            task_description="How many objects are taller than the object at point B?",
             inventory=inventory,
             answer=ans,
             reasoning="Compared visual evidence and stereo depth measurements against known 9cm box base reference.",

@@ -45,15 +45,11 @@ Known object categories:
 Extract and return the categories of the two objects we need to search for.
 """
 
-LEVEL3_TASK_INFO_PROMPT = """Analyze the attached photo of the laptop screen displaying Level 3 task instructions.
+LEVEL3_LEGIBILITY_PROMPT = """Analyze the attached photo of the laptop screen displaying the Level 3 task question.
 
-Your task:
-1. Transcribe the task instruction verbatim.
-2. Determine if completing this task requires physical size, height, width, volume, or dimension measurements
-   (such as "Where is the tallest object in the venue?", "Find the shortest object", "Measure the height of...", "Which object is largest?").
-   - Set use_high_visibility = True if measuring physical dimensions or finding tallest/shortest is required.
-   - Set use_high_visibility = False if the task only asks about visual appearance, colors, or item counts
-     (such as "Please count how many objects in the venue have the same color as the object at point D").
+Determine whether the task sentence/question on the laptop screen is completely legible:
+- Set `legible = True` ONLY if the screen is visible and the entire sentence/question can be read clearly without guessing any words, object names, point letters, or numbers.
+- Set `legible = False` if the screen is missing, cut off, blurry, obscured, washed out by glare, or if any part of the question is unreadable.
 """
 
 LEVEL3_SOLVE_PROMPT_TEMPLATE = """You are the perception and reasoning module of an autonomous TurtleBot4 Lite robot.
@@ -87,6 +83,11 @@ The robot has visited the following locations:
 2. Cross-reference the GPU server estimates (class, bounding box, stereo height) with the visual photos for each location.
    If a preliminary GPU estimate appears noisy, misclassified, or missing, refine it using visual evidence from the photo.
 3. Build an inventory listing each inspected point with its final object class, color, and height.
-4. Provide the direct, accurate answer to the task instruction.
+4. Provide the answer in `answer` as a complete, informative sentence — NEVER reply with only a bare number, single word, or bare point letter.
+   Always state the direct answer AND explicitly name the relevant objects and their point locations in a full sentence.
+   - Example (counting/comparison): If the prompt is "How many objects are taller than the object at point D?", do NOT just answer "3"; instead answer:
+     "3. The Vase at point B, the Clock at point C and the Book at point I are taller than the Cake at point D."
+   - Example (color count): "2. The Bottle at point B and the Cup at point H have the same blue color as the Bowl at point D."
+   - Example (superlative/location): "Point D. The Bottle at point D is the tallest object in the venue with an estimated height of 31.5 cm."
 """
 

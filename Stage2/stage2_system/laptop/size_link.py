@@ -8,6 +8,8 @@ import json
 import time
 from typing import Optional, Tuple
 from urllib.parse import urlparse
+import cv2
+import numpy as np
 
 from shared.protocol import DEFAULT_SSH_SIZE_PORT, DetectionItem, MeasurementResult
 
@@ -59,7 +61,7 @@ class SizeLink:
     ) -> MeasurementResult:
         """Send lossless stereo pair to size server and receive bounding box and height estimates."""
         if self.is_mock:
-            return self._mock_measurement(point_name, hint_class)
+            return self._mock_measurement(point_name, hint_class, composite_png_bytes)
 
         conn = None
         try:
@@ -99,8 +101,13 @@ class SizeLink:
             if conn:
                 conn.close()
 
-    def _mock_measurement(self, point_name: Optional[str], hint_class: Optional[str]) -> MeasurementResult:
-        """Generate plausible canned measurement for testing."""
+    def _mock_measurement(
+        self,
+        point_name: Optional[str],
+        hint_class: Optional[str],
+        composite_png_bytes: Optional[bytes] = None,
+    ) -> MeasurementResult:
+        """Generate plausible canned measurement with synthetic disparity/depth map for testing."""
         pt = (point_name or "X").upper()
         mock_table = {
             "B": ("cup", 10.5, 8.2, 0.82),
@@ -114,20 +121,45 @@ class SizeLink:
         }
         c_name, h_cm, w_cm, z_m = mock_table.get(pt, (hint_class or "object", 15.0, 8.0, 0.85))
 
+        img_h, img_w = 720, 1280
+        if composite_png_bytes:
+            try:
+                arr = np.frombuffer(composite_png_bytes, dtype=np.uint8)
+                comp = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if comp is not None and comp.shape[1] >= 4:
+                    img_h = int(comp.shape[0])
+                    img_w = int(comp.shape[1] // 2)
+            except Exception:
+                pass
+
+        x1 = int(img_w * 0.36)
+        x2 = int(img_w * 0.60)
+        y1 = int(img_h * 0.24)
+        y2 = int(img_h * 0.78)
+
         det = DetectionItem(
             class_name=c_name,
             confidence=0.91,
-            bbox_px=[350, 180, 520, 580],
+            bbox_px=[x1, y1, x2, y2],
             height_cm=h_cm,
             width_cm=w_cm,
             distance_m=z_m,
             valid_depth_pixels=14200,
         )
+
+        # Build synthetic Turbo depth/disparity visualization (cool far background, warm near object)
+        grad = np.linspace(210, 130, img_h, dtype=np.uint8)[:, None] * np.ones((1, img_w), dtype=np.uint8)
+        grad[y1:y2, x1:x2] = 35
+        depth_vis = cv2.applyColorMap(grad, cv2.COLORMAP_TURBO)
+        ok_d, buf_d = cv2.imencode(".jpg", depth_vis, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        depth_b64 = base64.b64encode(buf_d.tobytes()).decode("ascii") if ok_d else None
+
         return MeasurementResult(
             ok=True,
             point=point_name,
             primary=det,
             detections=[det],
+            depth_jpeg_b64=depth_b64,
             timing_ms={"rectify": 4.5, "stereo": 38.0, "yolo": 18.0, "total": 60.5},
         )
 

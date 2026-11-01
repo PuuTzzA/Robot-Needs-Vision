@@ -42,7 +42,7 @@ class RobotStatus:
     x: float = 0.0
     y: float = 0.0
     yaw_deg: float = 0.0
-    nav_state: str = "idle"  # idle | navigating | succeeded | aborted | canceled | rejected
+    nav_state: str = "idle"  # idle | navigating | succeeded | failed | aborted | canceled | rejected
     goal_seq: int = 0
     goal_keypoint_id: Optional[int] = None
     goal_name: Optional[str] = None
@@ -50,6 +50,7 @@ class RobotStatus:
     teleop_active: bool = False
     has_home_pose: bool = False
     keypoints_sha: str = ""
+    nav_message: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

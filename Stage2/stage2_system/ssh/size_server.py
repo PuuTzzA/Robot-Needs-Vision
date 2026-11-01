@@ -31,7 +31,7 @@ if str(ssh_dir) not in sys.path:
 from protocol import DEFAULT_SSH_SIZE_PORT, DetectionItem, MeasurementResult
 from measure import draw_detection_overlay, robust_measurement, select_primary_detection
 from utils.calibration_loader import StereoCalibration
-from utils.depth_converter import colorize_depth, disparity_to_depth
+from utils.depth_converter import colorize_depth, colorize_disparity, disparity_to_depth
 from estimators.deep_crestereo import DeepCREStereoEstimator
 
 
@@ -237,17 +237,19 @@ class SizeServerCore:
         # Select primary detection
         primary = select_primary_detection(detections, hint_class=hint_class, image_shape=left_rect.shape)
 
-        # 6. Annotate image and depth map
-        annotated = left_rect.copy()
+        # 6. Colorize depth/disparity map and annotate bounding box + size over it
+        depth_colored = colorize_depth(depth_m, min_depth=0.2, max_depth=4.0)
+        if not np.any(depth_colored):
+            depth_colored = colorize_disparity(disparity)
+
+        annotated = depth_colored.copy()
         for d in detections:
             is_prim = (primary is not None and d.bbox_px == primary.bbox_px)
             draw_detection_overlay(annotated, d, is_primary=is_prim)
 
-        depth_colored = colorize_depth(depth_m, min_depth=0.2, max_depth=4.0)
-
         # Encode to JPEG
         ok_a, buf_a = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        ok_d, buf_d = cv2.imencode(".jpg", depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        ok_d, buf_d = cv2.imencode(".jpg", depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
         b64_ann = base64.b64encode(buf_a.tobytes()).decode("ascii") if ok_a else None
         b64_depth = base64.b64encode(buf_d.tobytes()).decode("ascii") if ok_d else None
@@ -280,11 +282,20 @@ class SizeServerCore:
             distance_m=0.88,
             valid_depth_pixels=15000,
         )
+        synth_depth = np.linspace(3.5, 1.4, 720, dtype=np.float32)[:, None] * np.ones((1, 1280), dtype=np.float32)
+        synth_depth[200:650, 400:600] = 0.88
+        depth_colored = colorize_depth(synth_depth, min_depth=0.2, max_depth=4.0)
+        annotated = depth_colored.copy()
+        draw_detection_overlay(annotated, det, is_primary=True)
+        ok_a, buf_a = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok_d, buf_d = cv2.imencode(".jpg", depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return MeasurementResult(
             ok=True,
             point=point_name,
             primary=det,
             detections=[det],
+            annotated_jpeg_b64=base64.b64encode(buf_a.tobytes()).decode("ascii") if ok_a else None,
+            depth_jpeg_b64=base64.b64encode(buf_d.tobytes()).decode("ascii") if ok_d else None,
             timing_ms={"rectify": 5.0, "stereo": 35.0, "yolo": 20.0, "total": 60.0},
         )
 

@@ -100,6 +100,54 @@ class TestGuiVisuals(unittest.TestCase):
             )
             self.assertEqual(out.size, (w, h))
 
+    def test_failed_navigation_displayed_in_ui(self):
+        """Verifies VM failed navigation status and mission retry status are visibly shown in GUI."""
+        self.robot.active_vm_ip = "127.0.0.1"
+        self.robot._last_ping_time = __import__("time").time()
+        self.robot.latest_status = RobotStatus(
+            localized=True,
+            x=1.0,
+            y=1.0,
+            yaw_deg=0.0,
+            nav_state="failed",
+            nav_message="Navigation stuck (no movement for 10s)",
+            goal_seq=7,
+            goal_name="A",
+        )
+        self.gui._update_loop()
+        self.root.update()
+
+        self.assertIn("FAILED", self.gui.lbl_robot_conn.cget("text"))
+        self.assertIn("A", self.gui.lbl_robot_conn.cget("text"))
+        self.assertIn("Failed to get to A", self.gui.lbl_status.cget("text"))
+        self.assertEqual(self.gui.lbl_status.cget("fg"), "#991b1b")
+
+        # Also check mission mid-queue retry message
+        self.mission.set_status("Failed to get to A, continuing with B")
+        self.gui._update_loop()
+        self.root.update()
+        self.assertEqual(self.gui.lbl_status.cget("text"), "Status: Failed to get to A, continuing with B")
+        self.assertEqual(self.gui.lbl_status.cget("fg"), "#991b1b")
+
+    def test_measurement_overlay_uses_disparity_depth_map_with_size_above_bbox(self):
+        """Verifies Level 3 measurement overlay draws bbox + size over disparity/depth map instead of RGB."""
+        from laptop.vision_overlay import draw_measurement_overlay
+        import cv2
+
+        # Create a pure black RGB frame; mock SizeLink produces a vivid non-black Turbo depth map
+        black_rgb = np.zeros((480, 640, 3), dtype=np.uint8)
+        ok_png, png_buf = cv2.imencode(".png", np.hstack((black_rgb, black_rgb)))
+        self.assertTrue(ok_png)
+
+        meas = self.size.measure(png_buf.tobytes(), point_name="B")
+        self.assertTrue(meas.ok)
+        self.assertIsNotNone(meas.depth_jpeg_b64)
+
+        rendered = draw_measurement_overlay(black_rgb, meas, point_name="B")
+        self.assertEqual(rendered.shape, black_rgb.shape)
+        # Upper-left background outside bbox/banner would be (0,0,0) if RGB were used, but non-zero on depth map
+        self.assertGreater(float(rendered[20:80, 20:120].mean()), 15.0)
+
 
 if __name__ == "__main__":
     unittest.main()

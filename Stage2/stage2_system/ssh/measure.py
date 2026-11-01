@@ -111,27 +111,53 @@ def draw_detection_overlay(
     detection: DetectionItem,
     is_primary: bool = True,
 ) -> np.ndarray:
-    """Draw bounding box and 3D measurement label on image."""
-    x1, y1, x2, y2 = detection.bbox_px
-    color = (0, 255, 0) if is_primary else (200, 160, 40)
-    thickness = 3 if is_primary else 1
+    """Draw high-contrast bounding box and 3D size label above it on depth/disparity image."""
+    h, w = image.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in detection.bbox_px]
+    x1 = max(0, min(w - 1, x1))
+    x2 = max(0, min(w - 1, x2))
+    y1 = max(0, min(h - 1, y1))
+    y2 = max(0, min(h - 1, y2))
+    if x2 <= x1 or y2 <= y1:
+        return image
 
+    color = (90, 255, 130) if is_primary else (0, 215, 255)
+    thickness = 3 if is_primary else 2
+
+    # Double-stroke rectangle for crisp visibility over Turbo/Magma colormaps
+    cv2.rectangle(image, (x1, y1), (x2, y2), (12, 16, 22), thickness + 2)
     cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
 
-    # Label text
-    h_str = f"H {detection.height_cm:.1f}cm" if detection.height_cm is not None else ""
-    w_str = f"W {detection.width_cm:.1f}cm" if detection.width_cm is not None else ""
-    z_str = f"Z {detection.distance_m:.2f}m" if detection.distance_m is not None else ""
+    # Size text above the bounding box
+    size_parts = []
+    if detection.height_cm is not None:
+        size_parts.append(f"H: {detection.height_cm:.1f}cm")
+    if detection.width_cm is not None:
+        size_parts.append(f"W: {detection.width_cm:.1f}cm")
+    if detection.distance_m is not None:
+        size_parts.append(f"Z: {detection.distance_m:.2f}m")
 
-    text = f"{detection.class_name} ({detection.confidence:.2f})"
-    if h_str or w_str or z_str:
-        text += f" | {h_str} {w_str} {z_str}".strip()
+    size_str = " ".join(size_parts)
+    text = f"{detection.class_name} | {size_str}" if size_str else f"{detection.class_name}"
 
-    # Draw label banner
-    text_y = max(28, y1 - 10)
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
-    cv2.rectangle(image, (x1, text_y - th - 6), (x1 + tw + 8, text_y + 4), (15, 20, 25), -1)
-    cv2.putText(image, text, (x1 + 4, text_y - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.68
+    f_thick = 2
+    (tw, th), base = cv2.getTextSize(text, font, scale, f_thick)
+    box_h = th + base + 10
+    box_w = tw + 12
+
+    bx1 = max(4, min(max(4, w - box_w - 4), x1))
+    by2 = y1 - 4
+    if by2 - box_h < 4:
+        by1 = 4
+        by2 = min(h - 4, 4 + box_h)
+    else:
+        by1 = by2 - box_h
+
+    cv2.rectangle(image, (bx1, by1), (min(w - 2, bx1 + box_w), by2), (15, 20, 26), -1)
+    cv2.rectangle(image, (bx1, by1), (min(w - 2, bx1 + box_w), by2), color, 1)
+    cv2.putText(image, text, (bx1 + 6, by2 - base - 4), font, scale, color, f_thick, cv2.LINE_AA)
 
     return image
 
