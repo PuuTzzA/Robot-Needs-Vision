@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <!-- Participant profile for discovered entities -->
+        <participant profile_name="turtlebot4_fastdds_profile" is_default_profile="true">
+            <rtps>
+                <allocation>
+                    <total_participants>
+                        <initial>10</initial>
+                        <maximum>50</maximum>
+                        <increment>5</increment>
+                    </total_participants>
+                    <total_readers>
+                        <initial>50</initial>
+                        <maximum>500</maximum>
+                        <increment>20</increment>
+                    </total_readers>
+                    <total_writers>
+                        <initial>50</initial>
+                        <maximum>500</maximum>
+                        <increment>20</increment>
+                    </total_writers>
+                </allocation>
+            </rtps>
+        </participant>
+
+        <!-- Default DataReader profile: Prevents "Problem reserving CacheChange in reader" -->
+        <data_reader profile_name="default_reader_profile" is_default_profile="true">
+            <historyMemoryPolicy>DYNAMIC_RESERVE</historyMemoryPolicy>
+        </data_reader>
+
+        <!-- Default DataWriter profile -->
+        <data_writer profile_name="default_writer_profile" is_default_profile="true">
+            <historyMemoryPolicy>DYNAMIC_RESERVE</historyMemoryPolicy>
+        </data_writer>
+    </profiles>
+</dds>
+
