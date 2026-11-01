@@ -22,6 +22,10 @@ from .schemas import (
     Waypoints,
 )
 
+from .env_loader import ensure_env_loaded
+
+ensure_env_loaded()
+
 MODEL = "deepseek-flash"
 API_BASE = "https://api.deepseek.com"
 
@@ -29,7 +33,7 @@ API_BASE = "https://api.deepseek.com"
 def _headers() -> dict[str, str]:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
-        raise LLMError("Set DEEPSEEK_API_KEY before starting the application.")
+        raise LLMError("Set DEEPSEEK_API_KEY in Stage2/stage2_system/.env or as an environment variable.")
     return {"Authorization": "Bearer " + key}
 
 

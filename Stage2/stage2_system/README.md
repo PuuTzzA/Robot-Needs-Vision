@@ -242,12 +242,17 @@ Enter commands into the **Input** text box in the right sidebar or focus the win
 
 ---
 
-## 7. Connecting Your Chosen LLM Provider
+## 7. Configuring the LLM API Key (DeepSeek)
 
-The LLM interface in `laptop/llm/llm_api.py` is modular and provider-agnostic. To use Google Gemini:
-1. Ensure the Google GenAI SDK is installed: `pip install google-genai`
-2. Set your environment variable: `export GEMINI_API_KEY="your-api-key"` (or `$env:GEMINI_API_KEY="..."` in PowerShell).
-3. Open `laptop/llm/llm_api.py` and implement `query_structured()` following the provided example docstring.
+Both `laptop/llm/llm_api.py` (Levels 1–3, `Classify`, `Ping LLM`) and `laptop/llm/object_analysis.py` (manual **Capture & Analyze**) authenticate with `DEEPSEEK_API_KEY`.
+
+**Recommended (git-ignored `.env` file — set once):**
+1. Copy `Stage2/stage2_system/.env.example` to `Stage2/stage2_system/.env` (if `.env` does not already exist).
+2. Paste your API key after `DEEPSEEK_API_KEY=` in `Stage2/stage2_system/.env` and save. (`.env` is ignored by Git.)
+3. Verify connectivity in Mission Control by running `Ping LLM`.
+
+**Alternative (shell environment variable):**
+Set `$env:DEEPSEEK_API_KEY = "..."` in PowerShell (or `export DEEPSEEK_API_KEY="..."` in Bash) before launching `laptop/main.py`. If set in the shell, the environment variable takes precedence over `.env`.
 
 ---
 

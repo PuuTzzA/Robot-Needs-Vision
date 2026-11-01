@@ -7,6 +7,10 @@ import os
 import requests
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .env_loader import ensure_env_loaded
+
+ensure_env_loaded()
+
 
 PROMPT = "Let me know the estimated height, object color and the object here."
 MODEL = "deepseek-flash"
@@ -33,7 +37,7 @@ def analyze_object(jpeg_bytes: bytes, *, mock: bool = False) -> ObjectAnalysis:
         return ObjectAnalysis(object_name="Demo cup", height_cm=10, color="blue")
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
-        raise AnalysisError("Set DEEPSEEK_API_KEY in the terminal before starting the application.")
+        raise AnalysisError("Set DEEPSEEK_API_KEY in Stage2/stage2_system/.env or in the terminal before starting.")
     if not jpeg_bytes or len(jpeg_bytes) > 20_000_000:
         raise AnalysisError("Captured image is empty or too large to upload.")
     payload = {
