@@ -125,6 +125,69 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertIn("Answer:", result)
         print(f"[TEST PASS] Level 3 Verified: {result}")
 
+    def test_pose_confirmation_gate_and_interactive_flow(self):
+        """Verify /api/goto is gated until initial pose is confirmed and interactive [y/N] works."""
+        self.vm_controller.pose_confirmed = False
+        try:
+            ok, _seq, msg = self.vm_controller.request_goto(1)
+            self.assertFalse(ok)
+            self.assertIn("not confirmed", msg)
+
+            # Simulate user pressing Enter -> 'n' (retry) -> Enter -> 'y' (confirm)
+            answers = iter(["", "n", "", "y"])
+            confirmed = self.vm_controller.confirm_initial_pose_interactive(
+                input_fn=lambda _prompt: next(answers),
+                settle_delay_s=0.0,
+            )
+            self.assertTrue(confirmed)
+            self.assertTrue(self.vm_controller.pose_confirmed)
+
+            ok2, _seq2, _msg2 = self.vm_controller.request_goto(0)
+            self.assertTrue(ok2)
+            self.vm_controller.request_cancel()
+        finally:
+            self.vm_controller.pose_confirmed = True
+
+    def test_python310_fstring_compatibility_across_stage2_system(self):
+        """Ensure no Python 3.12-only backslashes inside f-string expressions exist in .py or .sh files."""
+        import io
+        import tokenize
+
+        def check_code(src: str, origin: str) -> None:
+            for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+                if tok.type != tokenize.STRING:
+                    continue
+                s = tok.string
+                quote_positions = [idx for idx in (s.find('"'), s.find("'")) if idx != -1]
+                if not quote_positions:
+                    continue
+                prefix = s[: min(quote_positions)].lower()
+                if "f" not in prefix:
+                    continue
+                depth = 0
+                i = min(quote_positions)
+                while i < len(s):
+                    if s[i] == "{":
+                        if i + 1 < len(s) and s[i + 1] == "{":
+                            i += 2
+                            continue
+                        depth += 1
+                    elif s[i] == "}" and depth > 0:
+                        depth -= 1
+                    elif depth > 0 and s[i] == "\\":
+                        self.fail(
+                            f"Python 3.10 incompatible backslash inside f-string in {origin}:{tok.start[0]}: {s}"
+                        )
+                    i += 1
+
+        for py_file in sys_root.rglob("*.py"):
+            check_code(py_file.read_text(encoding="utf-8"), str(py_file))
+
+        bad_sh_pattern = "f" + '"{p[' + "\\" + '"'
+        for sh_file in sys_root.rglob("*.sh"):
+            text = sh_file.read_text(encoding="utf-8")
+            self.assertNotIn(bad_sh_pattern, text, f"Escaped f-string found in {sh_file}")
+
 
 if __name__ == "__main__":
     unittest.main()
