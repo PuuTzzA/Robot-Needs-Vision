@@ -9,7 +9,10 @@ from .depth_converter import (
     calculate_compactness,
     sample_roi_depth,
 )
-from .frame_streamer import NetworkStereoReceiver
+try:
+    from .frame_streamer import NetworkStereoReceiver
+except ImportError:
+    NetworkStereoReceiver = None
 
 __all__ = [
     "StereoCalibration",
@@ -19,6 +22,7 @@ __all__ = [
     "attach_depth_legend",
     "calculate_compactness",
     "sample_roi_depth",
-    "NetworkStereoReceiver",
 ]
+if NetworkStereoReceiver is not None:
+    __all__.append("NetworkStereoReceiver")
 

@@ -43,7 +43,17 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 class SizeServerHandler(BaseHTTPRequestHandler):
     """Processes incoming stereo measurement requests."""
 
-    server_core: SizeServerCore
+    _server_core: Optional[SizeServerCore] = None
+
+    @property
+    def server_core(self) -> SizeServerCore:
+        if self._server_core is not None:
+            return self._server_core
+        return getattr(self.server, "server_core", None)
+
+    @server_core.setter
+    def server_core(self, val: SizeServerCore) -> None:
+        self._server_core = val
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -286,11 +296,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 2 SSH GPU Size Estimation Server")
     default_calib = ssh_dir / "calibration" / "stereo_calibration_fixed.yml"
     default_model = ssh_dir / "models" / "crestereo_embedded.onnx"
+    models_yolo = ssh_dir / "models" / "yolo11x-seg.pt"
+    root_yolo = ssh_dir.parent.parent.parent / "yolo11x-seg.pt"
+    if models_yolo.exists():
+        default_yolo = str(models_yolo)
+    elif root_yolo.exists():
+        default_yolo = str(root_yolo)
+    else:
+        default_yolo = "yolo11x-seg.pt"
 
     parser.add_argument("--port", type=int, default=DEFAULT_SSH_SIZE_PORT, help=f"Port to listen on (default: {DEFAULT_SSH_SIZE_PORT})")
     parser.add_argument("--calibration", type=Path, default=default_calib, help=f"Path to calibration YAML (default: {default_calib})")
     parser.add_argument("--model", type=Path, default=default_model, help=f"Path to CREStereo ONNX model (default: {default_model})")
-    parser.add_argument("--yolo", type=str, default="yolo11x-seg.pt", help="YOLO segmentation model (default: yolo11x-seg.pt)")
+    parser.add_argument("--yolo", type=str, default=default_yolo, help=f"YOLO segmentation model (default: {default_yolo})")
     parser.add_argument("--device", type=str, default="cuda:0", help="Inference device (e.g. cuda:0 or cpu)")
     parser.add_argument("--mock", action="store_true", help="Run in mock mode without loading weights")
     args = parser.parse_args()
@@ -308,6 +326,7 @@ def main() -> None:
         is_mock=args.mock,
     )
 
+    SizeServerHandler.server_core = core
     server = ThreadedHTTPServer(("0.0.0.0", args.port), SizeServerHandler)
     server.server_core = core  # type: ignore
     print(f"[Ready] Size Server listening at http://0.0.0.0:{args.port}...")
