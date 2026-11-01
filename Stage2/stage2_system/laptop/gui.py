@@ -4,7 +4,7 @@ Faithfully implements the layout specified in the project mockup:
 - Top Header: Status banner and Level indicator
 - Upper Left: Left camera live view
 - Upper Center: Right camera live view
-- Lower Left: Last processed frame (photo or stereo size measurement)
+- Lower Left: Last processed frame (photo, classification overlay, or stereo GPU size box)
 - Lower Center: Live occupancy map with robot pose, heading, and keypoints
 - Right Sidebar: Command cheat-sheet, text command input, and live console output
 - Bottom Banner: Multi-line Result display for current level
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 from shared.protocol import RobotStatus
 from .manual_capture import ManualCapture
+from .vision_overlay import draw_text_result_overlay
 
 
 class MissionControlGUI:
@@ -54,9 +55,13 @@ class MissionControlGUI:
         self.root.minsize(1200, 720)
         self.root.configure(bg="#22252a")
 
-        # Command history buffer
+        # Command history buffer & async command state
         self.history: list[str] = []
         self.history_idx: int = -1
+        self._cmd_busy: bool = False
+        self._last_manual_frame: Optional[tuple[np.ndarray, str]] = None
+        self._last_rendered_proc_key: Optional[tuple[int, int, int]] = None
+        self._last_console_text: str = ""
 
         # Image cache to prevent garbage collection
         self._img_left: Optional[ImageTk.PhotoImage] = None
@@ -207,7 +212,7 @@ class MissionControlGUI:
         self.canvas_proc = tk.Label(
             panel_proc,
             bg="#111827",
-            text="Shows the last screenshot or\nlast received depth map / size bounding box",
+            text="Shows the last screenshot,\nclassification overlay, or GPU size bounding box",
             fg="#9ca3af",
             font=self.font_subtitle,
             bd=0, highlightthickness=0, padx=0, pady=0
@@ -273,12 +278,11 @@ class MissionControlGUI:
 
         cheat_text = (
             "Possible Commands:\n"
-            "Level <Level>\n"
-            "Restart <Level>\n"
-            "Goto <Point>\n"
+            "Level <Level> / Restart <Level>\n"
+            "Goto <Point> / Home\n"
             "Ping <VM | SSH | LLM>\n"
-            "W / A / S / D\n"
-            "Photo\n"
+            "W / A / S / D / Space\n"
+            "Photo / CamReset\n"
             "Measure [hint]\n"
             "Classify\n"
             "Points / Status / Stop"
@@ -395,6 +399,10 @@ class MissionControlGUI:
         if self.manual_capture.busy and command in {"LEVEL", "RESTART", "PHOTO", "MEASURE", "CLASSIFY"}:
             print("[Capture] Wait for manual image analysis to finish before starting this command.")
             return
+        async_cmds = getattr(self.dispatcher, "ASYNC_COMMANDS", set())
+        if getattr(self, "_cmd_busy", False) and command in async_cmds:
+            print("[Command] Another camera/network command is currently running; please wait.")
+            return
         if command in {"LEVEL", "RESTART", "PHOTO", "MEASURE", "CLASSIFY"}:
             self.manual_capture.result_text = ""
         self.entry_cmd.delete(0, tk.END)
@@ -402,9 +410,22 @@ class MissionControlGUI:
         self.history_idx = len(self.history)
 
         print(f"> {cmd_text}")
-        out = self.dispatcher.execute(cmd_text)
-        if out:
-            print(out)
+        if command in async_cmds:
+            self._cmd_busy = True
+
+            def _bg_exec() -> None:
+                try:
+                    out_str = self.dispatcher.execute(cmd_text)
+                    if out_str:
+                        print(out_str)
+                finally:
+                    self._cmd_busy = False
+
+            threading.Thread(target=_bg_exec, daemon=True, name=f"CmdWorker-{command}").start()
+        else:
+            out = self.dispatcher.execute(cmd_text)
+            if out:
+                print(out)
 
     def _on_history_up(self, _event) -> None:
         if self.history and self.history_idx > 0:
@@ -430,11 +451,26 @@ class MissionControlGUI:
 
     def _update_loop(self) -> None:
         """Main Tkinter 20 Hz update loop."""
+        prev_after = getattr(self, "_after_id", None)
+        if prev_after is not None:
+            try:
+                self.root.after_cancel(prev_after)
+            except Exception:
+                pass
+            self._after_id = None
+
         # Manual worker only emits data; apply all widget/model updates on the Tk thread.
         for kind, value in self.manual_capture.poll():
             if kind == "captured":
                 frame, name = value
+                self._last_manual_frame = (frame, name)
                 self.m.set_processed_frame(frame, name)
+            elif kind == "result":
+                last_pair = getattr(self, "_last_manual_frame", None)
+                if last_pair is not None:
+                    raw_frame, raw_name = last_pair
+                    overlaid = draw_text_result_overlay(raw_frame, "Object Analysis", str(value))
+                    self.m.set_processed_frame(overlaid, f"classified_{raw_name}")
         self.btn_level_results.config(state="disabled" if self.manual_capture.busy else "normal")
 
         # 1. Update Status & Headers
@@ -466,18 +502,49 @@ class MissionControlGUI:
             config_kwargs["wraplength"] = max(200, self.panel_result.winfo_width() - 32)
         self.lbl_result.config(**config_kwargs)
 
-        # 4. Update Cameras Live Feed
+        # 4. Update Cameras Live Feed & Independent Per-Camera Health
         left_f, right_f, fps = self.m.camera.get_latest_pair()
-        self.lbl_left_hdr.config(text=f"Left camera : {fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}")
-        self.lbl_right_hdr.config(text=f"Right camera : {fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}")
+        health = (
+            self.m.camera.get_camera_health()
+            if hasattr(self.m.camera, "get_camera_health")
+            else None
+        )
+        if isinstance(health, dict) and isinstance(health.get("left_fps"), (int, float)):
+            l_fps = float(health["left_fps"])
+            r_fps = float(health["right_fps"])
+            l_state = str(health.get("left_state", "ok"))
+            r_state = str(health.get("right_state", "ok"))
+            l_tag = f" [{l_state.upper()}]" if l_state not in ("ok", "mock") else ""
+            r_tag = f" [{r_state.upper()}]" if r_state not in ("ok", "mock") else ""
+            self.lbl_left_hdr.config(
+                text=f"Left camera : {l_fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}{l_tag}"
+            )
+            self.lbl_right_hdr.config(
+                text=f"Right camera : {r_fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}{r_tag}"
+            )
+        else:
+            self.lbl_left_hdr.config(text=f"Left camera : {fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}")
+            self.lbl_right_hdr.config(text=f"Right camera : {fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}")
 
         self._render_frame_to_label(left_f, self.canvas_left_cam, "_img_left")
         self._render_frame_to_label(right_f, self.canvas_right_cam, "_img_right")
 
-        # 5. Update Last Processed Frame
+        # 5. Update Last Processed Frame (re-render only when frame or panel size changes)
         if self.m.last_processed_frame is not None:
             self.lbl_proc_hdr.config(text=f"Last Processed Frame: {self.m.last_processed_name}")
-            self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed")
+            proc_seq = getattr(self.m, "processed_frame_seq", None)
+            if isinstance(proc_seq, int):
+                try:
+                    pw = int(self.canvas_proc.winfo_width())
+                    ph = int(self.canvas_proc.winfo_height())
+                except (TypeError, ValueError):
+                    pw, ph = 500, 300
+                render_key = (proc_seq, pw, ph)
+                if render_key != getattr(self, "_last_rendered_proc_key", None):
+                    self._last_rendered_proc_key = render_key
+                    self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed")
+            else:
+                self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed")
 
         # 6. Update Map View
         try:
@@ -497,16 +564,18 @@ class MissionControlGUI:
         self._img_map = ImageTk.PhotoImage(map_img)
         self.canvas_map.config(image=self._img_map, text="")
 
-        # 7. Drain console text lines
+        # 7. Drain console text lines (only rewrite widget when content changes)
         import sys
         if hasattr(sys.stdout, "get_recent_lines"):
             lines = sys.stdout.get_recent_lines(50)  # type: ignore
             full_text = "\n".join(lines)
-            self.txt_console.config(state="normal")
-            self.txt_console.delete("1.0", tk.END)
-            self.txt_console.insert(tk.END, full_text)
-            self.txt_console.see(tk.END)
-            self.txt_console.config(state="disabled")
+            if full_text != getattr(self, "_last_console_text", None):
+                self._last_console_text = full_text
+                self.txt_console.config(state="normal")
+                self.txt_console.delete("1.0", tk.END)
+                self.txt_console.insert(tk.END, full_text)
+                self.txt_console.see(tk.END)
+                self.txt_console.config(state="disabled")
 
         self._after_id = self.root.after(50, self._update_loop)
 
@@ -554,9 +623,9 @@ class MissionControlGUI:
             pass
 
     def _on_close(self) -> None:
-        if self._after_id is not None:
+        if getattr(self, "_after_id", None) is not None:
             try:
-                self.root.after_cancel(self._after_id)
+                self.root.after_cancel(self._after_id)  # type: ignore[arg-type]
             except Exception:
                 pass
             self._after_id = None
@@ -565,4 +634,3 @@ class MissionControlGUI:
         self.m.camera.stop()
         self.m.robot.stop()
         self.root.destroy()
-

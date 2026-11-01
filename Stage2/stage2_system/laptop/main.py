@@ -107,7 +107,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--width", type=int, default=1280, help="Capture width (default: 1280).")
     parser.add_argument("--height", type=int, default=720, help="Capture height (default: 720).")
-    parser.add_argument("--fps", type=float, default=30.0, help="Target capture FPS (default: 30.0).")
+    parser.add_argument("--fps", type=float, default=15.0, help="Target capture FPS (default: 15.0 for USB stability).")
+    parser.add_argument(
+        "--settle-time",
+        type=float,
+        default=1.0,
+        help="Seconds to wait after reaching a goal before capturing a photo (default: 1.0).",
+    )
 
     # Simulation & Offline flags
     parser.add_argument("--mock-camera", action="store_true", help="Use synthetic test pattern feed.")
@@ -189,6 +195,7 @@ def main() -> None:
         size_link=size_link,
         keypoints=kps,
         runs_dir=log_dir,
+        camera_settle_s=args.settle_time,
     )
     dispatcher = CommandDispatcher(mission=mission)
 

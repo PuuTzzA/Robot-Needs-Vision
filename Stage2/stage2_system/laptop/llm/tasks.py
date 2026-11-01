@@ -78,33 +78,48 @@ def parse_level3_task(task_photo_bytes: bytes) -> Level3TaskInfo:
 
 def solve_level3(
     task_photo_bytes: bytes,
-    task_info: Level3TaskInfo,
-    point_photos: dict[str, bytes],
-    sensor_estimates: dict[str, Optional[dict]],
+    task_info: Optional[Level3TaskInfo] = None,
+    point_photos: Optional[dict[str, bytes]] = None,
+    sensor_estimates: Optional[dict[str, Optional[dict]]] = None,
 ) -> Level3Solution:
-    """Synthesize complete Level 3 solution using all visited point photos and sensor measurements."""
+    """Synthesize complete Level 3 solution in one shot from task photo, point photos, and GPU estimates."""
+    point_photos = point_photos or {}
+    sensor_estimates = sensor_estimates or {}
     inspected_str = ", ".join(f"Point {p}" for p in sorted(point_photos.keys()))
 
-    # Build sensor estimate block
+    # Build GPU sensor estimate block
     est_lines = []
     for pt in sorted(point_photos.keys()):
         est = sensor_estimates.get(pt)
         if est and est.get("primary"):
             p_data = est["primary"]
             c_name = p_data.get("class_name", "unknown")
+            conf = p_data.get("confidence")
+            conf_str = f"conf {conf:.2f}" if isinstance(conf, (int, float)) else ""
             h_val = p_data.get("height_cm")
-            h_str = f"{h_val:.1f} cm" if h_val is not None else "height n/a"
+            h_str = f"height {h_val:.1f} cm" if h_val is not None else "height n/a"
             w_val = p_data.get("width_cm")
             w_str = f"width {w_val:.1f} cm" if w_val is not None else ""
-            est_lines.append(f"- Point {pt}: [{c_name}, {h_str}, {w_str}]")
+            bbox = p_data.get("bbox_px")
+            bbox_str = f"bbox {bbox}" if bbox else ""
+            parts = [s for s in (c_name, conf_str, h_str, w_str, bbox_str) if s]
+            est_lines.append(f"- Point {pt}: [" + ", ".join(parts) + "]")
         else:
-            est_lines.append(f"- Point {pt}: [No stereo measurement available]")
+            est_lines.append(f"- Point {pt}: [No GPU detection / stereo measurement available]")
 
-    estimates_str = "\n".join(est_lines)
+    estimates_str = "\n".join(est_lines) if est_lines else "- None"
+
+    if task_info is not None and task_info.task_description.strip():
+        task_context = f'Task Instruction displayed on screen:\n"{task_info.task_description}"'
+    else:
+        task_context = (
+            "Task Instruction: Read and transcribe verbatim directly from the first attached image "
+            "labeled 'photo_task_laptop' (captured at Point 0)."
+        )
 
     prompt = LEVEL3_SOLVE_PROMPT_TEMPLATE.format(
-        task_description=task_info.task_description,
-        inspected_locations=inspected_str,
+        task_context=task_context,
+        inspected_locations=inspected_str or "None",
         preliminary_estimates=estimates_str,
     )
 

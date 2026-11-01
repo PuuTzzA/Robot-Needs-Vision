@@ -24,6 +24,7 @@ DISCOVERY_BEACON_RESPONSE_PREFIX = "TB4_ROBOT_OFFER:"
 
 # Task point name
 TASK_POINT_NAME = "0"
+HOME_GOAL_NAME = "START"
 
 # Default visibility thresholds
 VISIBILITY_DEFAULT = 0.10
@@ -47,6 +48,7 @@ class RobotStatus:
     goal_name: Optional[str] = None
     nav2_ready: bool = False
     teleop_active: bool = False
+    has_home_pose: bool = False
     keypoints_sha: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -70,6 +72,27 @@ class GotoRequest:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GotoRequest:
         return cls(keypoint_id=int(data.get("keypoint_id", -1)))
+
+
+@dataclass
+class GotoPoseRequest:
+    """Arbitrary map-frame pose navigation target sent from Laptop to VM."""
+    x: float
+    y: float
+    yaw_deg: float = 0.0
+    label: str = HOME_GOAL_NAME
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> GotoPoseRequest:
+        return cls(
+            x=float(data.get("x", 0.0)),
+            y=float(data.get("y", 0.0)),
+            yaw_deg=float(data.get("yaw_deg", 0.0)),
+            label=str(data.get("label", HOME_GOAL_NAME)),
+        )
 
 
 @dataclass

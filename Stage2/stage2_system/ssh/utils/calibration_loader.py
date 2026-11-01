@@ -128,6 +128,14 @@ class StereoCalibration:
                 self.focal_length_px,
             )
         }
+        self._cached_intrinsics: dict[tuple[int, int], tuple[float, float, float, float]] = {
+            (self.target_width, self.target_height): (
+                float(P1[0, 0]),
+                float(P1[1, 1]),
+                float(P1[0, 2]),
+                float(P1[1, 2]),
+            )
+        }
 
     def get_maps_for_size(
         self, width: int, height: int
@@ -174,6 +182,12 @@ class StereoCalibration:
         )
         focal_px = float(P1[0, 0])
         self._cached_maps[(width, height)] = (map_l_x, map_l_y, map_r_x, map_r_y, focal_px)
+        self._cached_intrinsics[(width, height)] = (
+            float(P1[0, 0]),
+            float(P1[1, 1]),
+            float(P1[0, 2]),
+            float(P1[1, 2]),
+        )
         return self._cached_maps[(width, height)]
 
     def get_focal_length(self, width: int | None = None, height: int | None = None) -> float:
@@ -182,6 +196,16 @@ class StereoCalibration:
             return self.focal_length_px
         _, _, _, _, focal_px = self.get_maps_for_size(width, height)
         return focal_px
+
+    def get_intrinsics(
+        self, width: int | None = None, height: int | None = None
+    ) -> tuple[float, float, float, float]:
+        """Return rectified (fx, fy, cx, cy) in pixels scaled to the given frame dimensions."""
+        if width is None or height is None:
+            width, height = self.target_width, self.target_height
+        if (width, height) not in self._cached_intrinsics:
+            self.get_maps_for_size(width, height)
+        return self._cached_intrinsics[(width, height)]
 
     def rectify_pair(
         self,
@@ -199,4 +223,3 @@ class StereoCalibration:
         left_rect = cv2.remap(left_raw, map_lx, map_ly, cv2.INTER_LINEAR)
         right_rect = cv2.remap(right_raw, map_rx, map_ry, cv2.INTER_LINEAR)
         return left_rect, right_rect
-

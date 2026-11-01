@@ -65,7 +65,9 @@ try:
         DEFAULT_VM_CMD_PORT,
         DISCOVERY_BEACON_REQUEST,
         DISCOVERY_BEACON_RESPONSE_PREFIX,
+        GotoPoseRequest,
         GotoRequest,
+        HOME_GOAL_NAME,
         RegisterRequest,
         RobotStatus,
         TeleopRequest,
@@ -78,7 +80,9 @@ except ImportError:
         DEFAULT_VM_CMD_PORT,
         DISCOVERY_BEACON_REQUEST,
         DISCOVERY_BEACON_RESPONSE_PREFIX,
+        GotoPoseRequest,
         GotoRequest,
+        HOME_GOAL_NAME,
         RegisterRequest,
         RobotStatus,
         TeleopRequest,
@@ -91,6 +95,11 @@ def _quat_to_yaw_deg(qx: float, qy: float, qz: float, qw: float) -> Optional[flo
         return None
     rx, ry, rz, rw = qx / norm, qy / norm, qz / norm, qw / norm
     return math.degrees(math.atan2(2.0 * (rw * rz + rx * ry), 1.0 - 2.0 * (ry * ry + rz * rz)))
+
+
+def _yaw_deg_to_quat(yaw_deg: float) -> dict[str, float]:
+    rad = math.radians(yaw_deg) / 2.0
+    return {"x": 0.0, "y": 0.0, "z": math.sin(rad), "w": math.cos(rad)}
 
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -153,6 +162,21 @@ class ControllerHttpHandler(BaseHTTPRequestHandler):
             req = GotoRequest.from_dict(payload)
             ok, seq, msg = self.controller.request_goto(req.keypoint_id)
             self._send_json({"accepted": ok, "goal_seq": seq, "message": msg})
+
+        elif self.path == "/api/goto_pose":
+            req = GotoPoseRequest.from_dict(payload)
+            ok, seq, msg = self.controller.request_goto_pose(
+                req.x, req.y, req.yaw_deg, label=req.label
+            )
+            self._send_json({"accepted": ok, "goal_seq": seq, "message": msg})
+
+        elif self.path == "/api/goto_home":
+            ok, seq, msg = self.controller.request_goto_home()
+            self._send_json({"accepted": ok, "goal_seq": seq, "message": msg})
+
+        elif self.path == "/api/set_home":
+            ok, msg = self.controller.latch_current_as_home()
+            self._send_json({"ok": ok, "message": msg})
 
         elif self.path == "/api/teleop":
             req = TeleopRequest.from_dict(payload)
@@ -217,6 +241,11 @@ class RobotController:
         self.sim_y = 0.0
         self.sim_yaw = 0.0
         self.sim_target_xy: Optional[tuple[float, float, float]] = None
+
+        # Latched initial/home pose (x, y, yaw_deg) from RViz localization or sim start
+        self.initial_pose: Optional[tuple[float, float, float]] = (
+            (self.sim_x, self.sim_y, self.sim_yaw) if self.sim_mode else None
+        )
 
         # Latest /amcl_pose cache (used as immediate fallback alongside TF lookup)
         self._amcl_pose_lock = threading.Lock()
@@ -425,6 +454,7 @@ class RobotController:
             goal_name=self.active_goal_name,
             nav2_ready=nav2_ready,
             teleop_active=self.teleop_active,
+            has_home_pose=(self.initial_pose is not None),
             keypoints_sha=self.keypoints.sha256,
         )
 
@@ -550,6 +580,17 @@ class RobotController:
             confirm = input_fn("  -> Is the robot correctly localized on the map? [y/N]: ").strip().lower()
             if confirm in ("y", "yes"):
                 self.clear_costmaps()
+                loc_now, lx, ly, lyaw = self.get_robot_pose()
+                if loc_now:
+                    self.initial_pose = (lx, ly, lyaw)
+                    print(
+                        f"  [OK] Latched Start/Home pose: x={lx:.2f} m, y={ly:.2f} m, yaw={lyaw:.1f} deg"
+                    )
+                elif loc:
+                    self.initial_pose = (rx, ry, ryaw)
+                    print(
+                        f"  [OK] Latched Start/Home pose: x={rx:.2f} m, y={ry:.2f} m, yaw={ryaw:.1f} deg"
+                    )
                 self.pose_confirmed = True
                 print("  [OK] Initial pose confirmed (Nav2 costmaps cleared).")
                 return True
@@ -558,9 +599,81 @@ class RobotController:
 
         return False
 
+    def latch_current_as_home(self) -> tuple[bool, str]:
+        """Record the robot's current localized pose as the Start/Home return pose."""
+        loc, rx, ry, ryaw = self.get_robot_pose()
+        if not loc:
+            return False, "Robot pose is not localized yet"
+        self.initial_pose = (rx, ry, ryaw)
+        msg = f"Latched Start/Home pose at ({rx:.2f}, {ry:.2f}, {ryaw:.1f} deg)"
+        print(f"[RobotController] {msg}")
+        return True, msg
+
+    def _ensure_initial_pose_latched(self) -> None:
+        """Lazily capture initial pose before first goal if --skip-pose-confirm was used."""
+        if self.initial_pose is not None:
+            return
+        loc, rx, ry, ryaw = self.get_robot_pose()
+        if loc:
+            self.initial_pose = (rx, ry, ryaw)
+            print(
+                f"[RobotController] Auto-latched Start/Home pose before first goal: ({rx:.2f}, {ry:.2f}, {ryaw:.1f} deg)"
+            )
+
     # -------------------------------------------------------------------------
     # Navigation & Teleop Handlers
     # -------------------------------------------------------------------------
+
+    def request_goto_pose(
+        self,
+        x: float,
+        y: float,
+        yaw_deg: float = 0.0,
+        label: str = HOME_GOAL_NAME,
+        keypoint_id: Optional[int] = None,
+        quat: Optional[dict[str, float]] = None,
+    ) -> tuple[bool, int, str]:
+        if not self.pose_confirmed:
+            return (
+                False,
+                0,
+                "Initial pose not confirmed yet -- confirm [y/N] in the VM robot_controller terminal first",
+            )
+
+        self._ensure_initial_pose_latched()
+
+        self.goal_counter += 1
+        seq = self.goal_counter
+        self.active_goal_seq = seq
+        self.active_keypoint_id = keypoint_id
+        self.active_goal_name = label
+        self.nav_state = "navigating"
+
+        print(f"[RobotController] Goal #{seq}: Navigating to {label} ({x:.2f}, {y:.2f}, {yaw_deg:.1f} deg)...")
+
+        if self.sim_mode:
+            self.sim_target_xy = (float(x), float(y), float(yaw_deg))
+            return True, seq, "Goal dispatched (simulated)"
+
+        if not self.nav_client.server_is_ready():
+            self.nav_state = "rejected"
+            return False, seq, "Nav2 server not ready"
+
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = "map"
+        goal_msg.pose.header.stamp = self.node.get_clock().now().to_msg()
+        goal_msg.pose.pose.position.x = float(x)
+        goal_msg.pose.pose.position.y = float(y)
+
+        eff_quat = quat if quat else _yaw_deg_to_quat(yaw_deg)
+        goal_msg.pose.pose.orientation.x = float(eff_quat.get("x", 0.0))
+        goal_msg.pose.pose.orientation.y = float(eff_quat.get("y", 0.0))
+        goal_msg.pose.pose.orientation.z = float(eff_quat.get("z", 0.0))
+        goal_msg.pose.pose.orientation.w = float(eff_quat.get("w", 1.0))
+
+        send_future = self.nav_client.send_goal_async(goal_msg)
+        send_future.add_done_callback(lambda f: self._on_goal_response(f, seq))
+        return True, seq, "Goal accepted by Nav2"
 
     def request_goto(self, keypoint_id: int) -> tuple[bool, int, str]:
         if not self.pose_confirmed:
@@ -574,39 +687,35 @@ class RobotController:
         if not kp:
             return False, 0, f"Keypoint ID {keypoint_id} not found"
 
-        self.goal_counter += 1
-        seq = self.goal_counter
-        self.active_goal_seq = seq
-        self.active_keypoint_id = keypoint_id
-        self.active_goal_name = kp.name
-        self.nav_state = "navigating"
+        return self.request_goto_pose(
+            x=kp.x,
+            y=kp.y,
+            yaw_deg=kp.yaw_degrees,
+            label=kp.name,
+            keypoint_id=keypoint_id,
+            quat=kp.quaternion,
+        )
 
-        print(f"[RobotController] Goal #{seq}: Navigating to {kp.name} ({kp.x:.2f}, {kp.y:.2f})...")
+    def request_goto_home(self) -> tuple[bool, int, str]:
+        if not self.pose_confirmed:
+            return (
+                False,
+                0,
+                "Initial pose not confirmed yet -- confirm [y/N] in the VM robot_controller terminal first",
+            )
 
-        if self.sim_mode:
-            # Kinematic simulation
-            self.sim_target_xy = (kp.x, kp.y, kp.yaw_degrees)
-            return True, seq, "Goal dispatched (simulated)"
+        self._ensure_initial_pose_latched()
+        if self.initial_pose is None:
+            return False, 0, "No Start/Home pose recorded yet"
 
-        if not self.nav_client.server_is_ready():
-            self.nav_state = "rejected"
-            return False, seq, "Nav2 server not ready"
-
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = "map"
-        goal_msg.pose.header.stamp = self.node.get_clock().now().to_msg()
-        goal_msg.pose.pose.position.x = float(kp.x)
-        goal_msg.pose.pose.position.y = float(kp.y)
-
-        quat = kp.quaternion
-        goal_msg.pose.pose.orientation.x = float(quat.get("x", 0.0))
-        goal_msg.pose.pose.orientation.y = float(quat.get("y", 0.0))
-        goal_msg.pose.pose.orientation.z = float(quat.get("z", 0.0))
-        goal_msg.pose.pose.orientation.w = float(quat.get("w", 1.0))
-
-        send_future = self.nav_client.send_goal_async(goal_msg)
-        send_future.add_done_callback(lambda f: self._on_goal_response(f, seq))
-        return True, seq, "Goal accepted by Nav2"
+        hx, hy, hyaw = self.initial_pose
+        return self.request_goto_pose(
+            x=hx,
+            y=hy,
+            yaw_deg=hyaw,
+            label=HOME_GOAL_NAME,
+            keypoint_id=None,
+        )
 
     def _on_goal_response(self, future, seq: int) -> None:
         try:

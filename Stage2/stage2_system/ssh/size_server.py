@@ -178,8 +178,8 @@ class SizeServerCore:
         disparity = self.estimator.estimate_disparity(left_rect, right_rect)
         t_disp_ms = (time.perf_counter() - t_disp_start) * 1000.0
 
-        # 4. Metric Depth
-        focal_px = self.calibration.get_focal_length(left_rect.shape[1], left_rect.shape[0])
+        # 4. Metric Depth (using resolution-matched rectified intrinsics fx, fy, cx, cy)
+        focal_px, fy, cx, cy = self.calibration.get_intrinsics(left_rect.shape[1], left_rect.shape[0])
         depth_m = disparity_to_depth(
             disparity=disparity,
             focal_length_px=focal_px,
@@ -199,9 +199,6 @@ class SizeServerCore:
 
             if res and res.masks and res.boxes:
                 masks = res.masks.data.detach().cpu().numpy()
-                cx = float(self.calibration.P1[0, 2]) if self.calibration.P1 is not None else (left_rect.shape[1] / 2.0)
-                cy = float(self.calibration.P1[1, 2]) if self.calibration.P1 is not None else (left_rect.shape[0] / 2.0)
-                fy = float(self.calibration.P1[1, 1]) if self.calibration.P1 is not None else focal_px
 
                 for idx, mask in enumerate(masks):
                     mask_resized = cv2.resize(
@@ -341,4 +338,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

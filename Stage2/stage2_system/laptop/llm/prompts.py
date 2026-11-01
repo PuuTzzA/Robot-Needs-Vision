@@ -59,11 +59,10 @@ Your task:
 LEVEL3_SOLVE_PROMPT_TEMPLATE = """You are the perception and reasoning module of an autonomous TurtleBot4 Lite robot.
 
 ### CONTEXT & TASK:
-Task Instruction displayed on screen:
-"{task_description}"
+{task_context}
 
 The robot has visited the following locations:
-- Point 0: Task Center (laptop screen displaying task instructions)
+- Point 0: Task Center (laptop screen displaying task instructions — attached as 'photo_task_laptop')
 - Inspected Object Locations: {inspected_locations}
 
 ### REFERENCE INFORMATION:
@@ -80,13 +79,14 @@ The robot has visited the following locations:
   9. Vase (~25-35 cm)
   10. Bottle 1.5L (~30-35 cm)
 
-### PRELIMINARY ROBOT SENSOR ESTIMATES:
+### PRELIMINARY GPU SERVER STEREO & YOLO ESTIMATES:
 {preliminary_estimates}
 
 ### INSTRUCTIONS:
-1. Cross-reference the sensor estimates with the visual photos for each location.
-   If a preliminary sensor estimate appears noisy or incorrect, adjust it based on visual evidence.
-2. Build an internal inventory listing each inspected point with its final object class, color, and height.
-3. Provide the direct, accurate answer to the task instruction.
+1. Read 'photo_task_laptop' carefully and record the verbatim task instruction in `task_description`.
+2. Cross-reference the GPU server estimates (class, bounding box, stereo height) with the visual photos for each location.
+   If a preliminary GPU estimate appears noisy, misclassified, or missing, refine it using visual evidence from the photo.
+3. Build an inventory listing each inspected point with its final object class, color, and height.
+4. Provide the direct, accurate answer to the task instruction.
 """
 

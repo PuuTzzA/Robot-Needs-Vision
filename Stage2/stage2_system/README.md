@@ -60,36 +60,28 @@ The architecture coordinates three separate execution nodes communicating over l
 ## 2. Workflows by Level
 
 ### Level 1: Directed Inspection
-1. Robot moves to **Point 0** (Task Center).
-2. Captures photo of the laptop screen displaying task instructions.
-3. Multimodal LLM parses instructions to identify two target waypoint locations (e.g., `Point B` and `Point E`).
-4. For each target point:
-   - Navigates to the closest recorded keypoint entry with visibility $> 0.10$.
-   - Captures photo of the object.
-   - LLM classifies object category (e.g. Cup, Banana).
-5. Displays final result in bottom banner (e.g., `Point B: Cup, Point E: Banana`).
+1. Robot moves to **Point 0** (Task Center), waits ~1.0s for camera stabilization, and captures a fresh photo of the laptop screen.
+2. Multimodal LLM parses instructions to identify two target waypoint locations (e.g., `Point B` and `Point E`).
+3. For each target point (ordered by closest Euclidean distance):
+   - Navigates to the closest recorded keypoint entry, settles ~1.0s, and captures a fresh photo.
+   - Immediately dispatches parallel navigation back to the initial RViz **Start** pose once the final photo is taken.
+   - LLM classifies object category and overlays the classification result directly onto **Last Processed Frame**.
+4. Displays final result in bottom banner and completes return to **Start**.
 
 ### Level 2: Category Search & Early Exit
-1. Robot moves to **Point 0** (Task Center).
-2. Captures photo of task instructions.
-3. LLM extracts the two target object categories to find (e.g., `Mug` and `Book`).
-4. Generates greedy nearest-neighbour path visiting object points one by one.
-5. At each point:
-   - Navigates to keypoint with visibility $> 0.10$.
-   - Takes photo and classifies object.
-   - If an object matches a target category, records its location.
-   - **Early Exit**: as soon as both categories are discovered, immediately stops searching and displays the solution.
+1. Robot moves to **Point 0** (Task Center), settles ~1.0s, and captures a fresh photo of task instructions.
+2. LLM extracts the two target object categories to find (e.g., `Mug` and `Book`).
+3. Visits object points one by one in greedy closest-Euclidean-distance order:
+   - Navigates to the closest entry, settles ~1.0s, takes a fresh photo, classifies the object, and overlays the result on **Last Processed Frame**.
+   - **Early Exit**: as soon as both categories are discovered, immediately stops searching, publishes the solution, and navigates back to the initial RViz **Start** pose.
 
-### Level 3: Multimodal Measurement & Reasoning
-1. Robot moves to **Point 0**.
-2. Captures photo of Level 3 task instructions.
-3. First LLM query extracts the task text and determines whether size/height estimation is needed (`use_high_visibility`).
-4. If height is needed, the robot uses keypoints with visibility $> 0.75$; otherwise, visibility $> 0.10$.
-5. Visits **all** object locations in greedy order:
-   - Captures visual photo.
-   - If size estimation is required: captures lossless stereo pair, queries SSH GPU Size Server, and receives bounding box and metric height in cm.
-6. Executes one-shot multimodal reasoning with the LLM, cross-referencing all photos and sensor height measurements against the known 9 cm pedestal reference.
-7. Displays final answer and inventory.
+### Level 3: Async GPU Measurement & One-Shot Multimodal Reasoning
+1. Robot moves to **Point 0**, settles ~1.0s, and captures `task_level3.jpg` (**no initial LLM API call**).
+2. Visits **all** object locations in greedy closest-Euclidean-distance order (no visibility filtering):
+   - Settles ~1.0s and captures a fresh synchronized stereo pair.
+   - Submits the lossless stereo composite PNG **asynchronously** to the SSH GPU Size Server (for YOLO bounding box, class, and metric stereo height) while **immediately driving to the next point** (or driving back to **Start** after the final photo).
+   - Overlays each returning GPU bounding box + class + height onto **Last Processed Frame**.
+3. Executes a single end-of-run multimodal LLM query (`solve_level3`) with `task_level3.jpg`, all object photos, and all GPU estimates to transcribe the task, synthesize the inventory, and output the final answer while returning to **Start**.
 
 ---
 
@@ -219,15 +211,17 @@ Enter commands into the **Input** text box in the right sidebar or focus the win
 | `Level` | `<1\|2\|3>` | `Level 1` | Starts autonomous execution of specified level |
 | `Restart` | `<1\|2\|3>` | `Restart 2` | Aborts current run, clears previous results, and restarts level |
 | `Stop` | *(none)* | `Stop` | Cancels active navigation and halts running mission |
-| `Goto` | `<Point>` | `Goto B` | Dispatches robot to closest keypoint entry for point name (vis $> 0.10$) |
+| `Goto` | `<Point>` | `Goto B` | Dispatches robot to closest keypoint entry by Euclidean distance |
 | `Goto` | `#<ID>` | `Goto #2` | Sends robot to specific keypoint ID |
+| `Home` | *(none)* | `Home` | Navigates robot back to its latched initial RViz Start pose |
 | `Ping` | `<VM\|SSH\|LLM>` | `Ping VM` | Tests round-trip latency to specified subsystem |
 | `W` / `S` | *(none)* | `W` | Drives robot forward / backward (0.15 m/s burst) |
 | `A` / `D` | *(none)* | `A` | Turns robot left / right (0.50 rad/s burst) |
 | `Space` | *(none)* | `Space` | Immediately halts teleop motion |
-| `Photo` | *(none)* | `Photo` | Captures camera frame and shows it in Last Processed Frame |
-| `Measure` | `[hint]` | `Measure bottle` | Sends stereo pair to SSH GPU server and displays bounding box + height |
-| `Classify` | *(none)* | `Classify` | Queries LLM to classify object currently in camera frame |
+| `Photo` | *(none)* | `Photo` | Captures fresh camera frame and shows it in Last Processed Frame |
+| `Measure` | `[hint]` | `Measure bottle` | Sends stereo pair to SSH GPU server and overlays bounding box + height |
+| `Classify` | *(none)* | `Classify` | Queries LLM to classify current camera frame and overlays result on preview |
+| `CamReset` | *(none)* | `CamReset` | Force-reopens USB camera streams if a webcam glitches |
 | `Points` / `List`| *(none)* | `Points` | Displays table of all loaded keypoints, coordinates, and visibilities |
 | `Status` | *(none)* | `Status` | Prints robot connection, pose, Nav2 state, and loaded points |
 | `Help` | *(none)* | `Help` | Prints command reference cheat-sheet |
@@ -239,9 +233,8 @@ Enter commands into the **Input** text box in the right sidebar or focus the win
 - **Zero Overwriting**: The system **never modifies or overwrites** `stage2_keypoints.json` or `final_room.yaml`.
 - **Live Hot-Reloading**: The keypoint store checks file `mtime` on every query. If you record new keypoints using `camera_keypoints.py` on the VM, the controller detects the change immediately without requiring a restart.
 - **Selection Rule**:
-  - Filters entries matching the target name by `visibility >= min_visibility`.
-  - Picks the eligible entry with the smallest Euclidean distance to the robot's current $(x, y)$ position.
-  - If no entry meets the threshold, logs a warning and falls back to the highest available visibility.
+  - By default (`min_visibility=0.0`), selects the entry matching the target name with the smallest Euclidean distance to the robot's current $(x, y)$ position (no visibility filtering).
+  - If an explicit `min_visibility > 0` threshold is supplied programmatically, filters by `visibility >= min_visibility` first and falls back to the highest available visibility if none pass.
 
 ---
 

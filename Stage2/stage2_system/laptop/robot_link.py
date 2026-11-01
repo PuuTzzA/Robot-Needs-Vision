@@ -19,7 +19,9 @@ from shared.protocol import (
     DEFAULT_VM_CMD_PORT,
     DISCOVERY_BEACON_REQUEST,
     DISCOVERY_BEACON_RESPONSE_PREFIX,
+    GotoPoseRequest,
     GotoRequest,
+    HOME_GOAL_NAME,
     RegisterRequest,
     RobotStatus,
     TeleopRequest,
@@ -248,6 +250,31 @@ class RobotLink:
         if res and res.get("accepted"):
             seq = int(res.get("goal_seq", 0))
             return True, seq, "Goal accepted by Nav2"
+        msg = res.get("message", "Request failed or rejected") if res else "No response from robot"
+        return False, 0, msg
+
+    def goto_pose(
+        self,
+        x: float,
+        y: float,
+        yaw_deg: float = 0.0,
+        label: str = HOME_GOAL_NAME,
+    ) -> Tuple[bool, int, str]:
+        """Dispatch a Nav2 navigation goal for an arbitrary map pose (x, y, yaw_deg)."""
+        req = GotoPoseRequest(x=x, y=y, yaw_deg=yaw_deg, label=label)
+        res = self._http_post("/api/goto_pose", req.to_dict())
+        if res and res.get("accepted"):
+            seq = int(res.get("goal_seq", 0))
+            return True, seq, "Goal accepted by Nav2"
+        msg = res.get("message", "Request failed or rejected") if res else "No response from robot"
+        return False, 0, msg
+
+    def goto_home(self) -> Tuple[bool, int, str]:
+        """Dispatch navigation back to the initial RViz localized Start/Home pose."""
+        res = self._http_post("/api/goto_home", {})
+        if res and res.get("accepted"):
+            seq = int(res.get("goal_seq", 0))
+            return True, seq, "Home goal accepted by Nav2"
         msg = res.get("message", "Request failed or rejected") if res else "No response from robot"
         return False, 0, msg
 

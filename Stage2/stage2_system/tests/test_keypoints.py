@@ -99,6 +99,18 @@ class TestKeypointStore(unittest.TestCase):
         # Start (0, 0) is closer to B (2, 2) than C (8, 1)
         self.assertEqual(order, ["B", "C"])
 
+    def test_default_select_entry_ignores_visibility_and_picks_closest(self):
+        store = KeypointStore()
+        store.update_from_payload({
+            "keypoints": [
+                {"id": 10, "name": "D", "x": 1.0, "y": 1.0, "visibility": 0.50},
+                {"id": 11, "name": "D", "x": 5.0, "y": 5.0, "visibility": 0.90},
+            ]
+        })
+        chosen = store.select_entry("D", robot_xy=(0.8, 0.9))
+        self.assertIsNotNone(chosen)
+        self.assertEqual(chosen.id, 10)
+
     def test_mtime_hot_reload_and_no_write(self):
         with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".json") as f:
             json.dump(self.sample_data, f)

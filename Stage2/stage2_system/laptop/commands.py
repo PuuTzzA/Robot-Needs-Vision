@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import base64
-import shlex
 import time
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
 if TYPE_CHECKING:
     from .mission import MissionManager
 
-from shared.protocol import VISIBILITY_DEFAULT
 from .llm import llm_api
 from .llm import tasks as llm_tasks
+from .vision_overlay import draw_classification_overlay, draw_measurement_overlay
 
 
 HELP_BANNER = """
@@ -26,14 +24,16 @@ Restart <1|2|3>        - Abort, clear results, and restart specified level
 Stop                   - Abort active navigation and cancel current level
 Goto <Point>           - Send robot to closest keypoint entry (e.g. 'Goto B' or 'Goto 0')
 Goto #<id>             - Send robot to specific unique keypoint ID (e.g. 'Goto #2')
+Home                   - Navigate robot back to its initial RViz Start position
 Ping <VM|SSH|LLM>      - Test round-trip latency to specified subsystem
 W / A / S / D          - Teleop robot: forward, left, backward, right burst (0.6s)
 Space                  - Stop robot teleop motion immediately
-Photo                  - Capture camera frame and display in 'Last Processed Frame'
-Measure [hint]         - Request stereo height estimate from SSH server (e.g. 'Measure bottle')
-Classify               - Send current camera frame to LLM to identify object category
+Photo                  - Capture fresh camera frame and display in 'Last Processed Frame'
+Measure [hint]         - Request stereo height & bbox from SSH GPU server + overlay preview
+Classify               - Classify current camera frame via LLM + overlay result on preview
+CamReset               - Force-reopen USB camera streams if a webcam glitches
 Points / List          - Display all loaded keypoints and their visibility values
-Status                 - Print current subsystem status and robot pose
+Status                 - Print current subsystem, camera, and robot pose status
 Help                   - Show this command reference
 ================================================================================
 """
@@ -42,8 +42,23 @@ Help                   - Show this command reference
 class CommandDispatcher:
     """Parses and executes user commands typed into GUI command input or terminal."""
 
+    ASYNC_COMMANDS = {"PING", "PHOTO", "MEASURE", "CLASSIFY", "CAMRESET", "RESETCAM"}
+
     def __init__(self, mission: MissionManager) -> None:
         self.m = mission
+
+    def _grab_left_for_command(self) -> tuple[ bytes | None, np.ndarray | None ]:
+        """Grab a fresh left frame when camera loop is active, falling back to latest buffer."""
+        left_bytes, left_arr = self.m.camera.capture_fresh_left(timeout_s=2.5, quality=90)
+        if left_bytes is not None and left_arr is not None:
+            return left_bytes, left_arr
+
+        left_arr_fallback, _, _ = self.m.camera.get_latest_pair()
+        left_bytes_fallback = self.m.camera.snapshot_left_jpeg(quality=90)
+        if left_bytes_fallback is not None and left_arr_fallback is None:
+            arr = np.frombuffer(left_bytes_fallback, dtype=np.uint8)
+            left_arr_fallback = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return left_bytes_fallback, left_arr_fallback
 
     def execute(self, line: str) -> str:
         line = line.strip()
@@ -73,29 +88,35 @@ class CommandDispatcher:
                 self.m.stop()
                 return "Mission and navigation stopped."
 
+            elif cmd == "HOME":
+                ok, _seq, msg = self.m.robot.goto_home()
+                return "Navigating back to initial Start position..." if ok else f"Home failed: {msg}"
+
             elif cmd == "GOTO":
                 if not args:
-                    return "[ERROR] Usage: Goto <PointName> (e.g. 'Goto B') or Goto #<id> (e.g. 'Goto #2')"
+                    return "[ERROR] Usage: Goto <PointName> (e.g. 'Goto B'), Goto Start, or Goto #<id>"
                 target = args[0]
+                if target.upper() in ("START", "HOME"):
+                    ok, _seq, msg = self.m.robot.goto_home()
+                    return "Navigating back to initial Start position..." if ok else f"Goto Start failed: {msg}"
                 if target.startswith("#"):
-                    # ID specified
                     try:
                         kp_id = int(target[1:])
                         kp = self.m.keypoints.get_by_id(kp_id)
                         if not kp:
                             return f"[ERROR] Keypoint ID {kp_id} not found."
-                        ok, seq, msg = self.m.robot.goto_keypoint(kp.id)
+                        ok, _seq, msg = self.m.robot.goto_keypoint(kp.id)
                         return f"Navigating to Keypoint ID {kp.id} ('{kp.name}')..." if ok else f"Goto failed: {msg}"
                     except ValueError:
                         return f"[ERROR] Invalid ID '{target}'"
                 else:
                     pt_name = target.upper()
                     cur_pose = (self.m.robot.latest_status.x, self.m.robot.latest_status.y)
-                    kp = self.m.keypoints.select_entry(pt_name, robot_xy=cur_pose, min_visibility=VISIBILITY_DEFAULT)
+                    kp = self.m.keypoints.select_entry(pt_name, robot_xy=cur_pose, min_visibility=0.0)
                     if not kp:
                         return f"[ERROR] Keypoint '{pt_name}' not found in keypoint store."
-                    ok, seq, msg = self.m.robot.goto_keypoint(kp.id)
-                    return f"Navigating to Point {pt_name} (ID {kp.id}, Vis {kp.visibility:.2f})..." if ok else f"Goto failed: {msg}"
+                    ok, _seq, msg = self.m.robot.goto_keypoint(kp.id)
+                    return f"Navigating to Point {pt_name} (ID {kp.id})..." if ok else f"Goto failed: {msg}"
 
             elif cmd in ("W", "A", "S", "D", "SPACE"):
                 key_map = {"W": "w", "A": "a", "S": "s", "D": "d", "SPACE": "space"}
@@ -116,9 +137,11 @@ class CommandDispatcher:
                     return f"Ping LLM: {'OK' if ok else 'FAIL'} ({info})"
                 return "[ERROR] Usage: Ping <VM|SSH|LLM>"
 
+            elif cmd in ("CAMRESET", "RESETCAM"):
+                return self.m.camera.reset_cameras()
+
             elif cmd == "PHOTO":
-                left_bytes = self.m.camera.snapshot_left_jpeg()
-                left_arr, _, _ = self.m.camera.get_latest_pair()
+                _left_bytes, left_arr = self._grab_left_for_command()
                 if left_arr is not None:
                     ts = time.strftime("%H%M%S")
                     self.m.set_processed_frame(left_arr, f"snapshot_{ts}.jpg")
@@ -127,20 +150,25 @@ class CommandDispatcher:
 
             elif cmd == "MEASURE":
                 hint = args[0] if args else None
-                composite_png = self.m.camera.snapshot_stereo_composite_png()
+                _left_jpg, left_arr, composite_png = self.m.camera.capture_fresh_stereo(timeout_s=3.0, quality=90)
+                if not composite_png:
+                    composite_png = self.m.camera.snapshot_stereo_composite_png()
+                    if left_arr is None:
+                        left_arr, _, _ = self.m.camera.get_latest_pair()
                 if not composite_png:
                     return "[ERROR] Could not capture stereo pair from camera."
 
+                ts = time.strftime("%H%M%S")
+                if left_arr is not None:
+                    self.m.set_processed_frame(left_arr, f"measure_capture_{ts}.jpg")
+
                 res = self.m.size_link.measure(composite_png, hint_class=hint)
+                if left_arr is not None:
+                    ann_img = draw_measurement_overlay(left_arr, res)
+                    self.m.set_processed_frame(ann_img, f"measure_result_{ts}.jpg")
+
                 if not res.ok:
                     return f"[ERROR] Size estimation failed: {res.error_message}"
-
-                if res.annotated_jpeg_b64:
-                    jpg_bytes = base64.b64decode(res.annotated_jpeg_b64)
-                    arr = np.frombuffer(jpg_bytes, dtype=np.uint8)
-                    ann_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                    if ann_img is not None:
-                        self.m.set_processed_frame(ann_img, "measure_result.jpg")
 
                 p = res.primary
                 if p:
@@ -151,10 +179,21 @@ class CommandDispatcher:
                 return "Measure completed, but no object detected."
 
             elif cmd == "CLASSIFY":
-                left_bytes = self.m.camera.snapshot_left_jpeg()
-                if not left_bytes:
-                    return "[ERROR] Could not grab camera frame."
+                left_bytes, left_arr = self._grab_left_for_command()
+                if not left_bytes or left_arr is None:
+                    return "[ERROR] Could not grab a fresh camera frame."
+
+                ts = time.strftime("%H%M%S")
+                self.m.set_processed_frame(left_arr, f"classify_capture_{ts}.jpg")
+
                 cat_res = llm_tasks.classify_object(left_bytes, "CURRENT_VIEW")
+                overlaid = draw_classification_overlay(
+                    left_arr,
+                    title="Manual Capture",
+                    category=cat_res.category,
+                    color=cat_res.color,
+                )
+                self.m.set_processed_frame(overlaid, f"classified_{ts}.jpg")
                 return f"Classification: {cat_res.category} (Color: {cat_res.color or 'n/a'})"
 
             elif cmd in ("POINTS", "LIST"):
@@ -170,9 +209,11 @@ class CommandDispatcher:
             elif cmd == "STATUS":
                 st = self.m.robot.latest_status
                 c_status = "Connected" if self.m.robot.is_connected else "Disconnected"
+                health = self.m.camera.get_camera_health()
                 lines = [
-                    f"Robot Status:     {c_status} (Pose: X={st.x:.2f}m, Y={st.y:.2f}m, Yaw={st.yaw_deg:.1f}°)",
-                    f"Nav2 State:       {st.nav_state} (Goal Seq: {st.goal_seq}, Keypoint: {st.goal_name or '-'})",
+                    f"Robot Status:     {c_status} (Pose: X={st.x:.2f}m, Y={st.y:.2f}m, Yaw={st.yaw_deg:.1f}°, Home={'Yes' if st.has_home_pose else 'Auto'})",
+                    f"Nav2 State:       {st.nav_state} (Goal Seq: {st.goal_seq}, Target: {st.goal_name or '-'})",
+                    f"Camera Health:    Left={health['left_state']} ({health['left_fps']:.1f} fps) | Right={health['right_state']} ({health['right_fps']:.1f} fps) | Reopens={health['reopen_count']}",
                     f"Mission Manager:  {self.m.status_text} (Level: {self.m.current_level})",
                     f"Keypoints Loaded: {len(self.m.keypoints.get_all())} entries",
                 ]
@@ -190,4 +231,3 @@ class CommandDispatcher:
 
         except Exception as err:
             return f"Command execution error: {err}"
-

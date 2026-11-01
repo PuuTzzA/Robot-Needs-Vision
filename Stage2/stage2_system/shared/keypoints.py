@@ -172,43 +172,44 @@ class KeypointStore:
         self,
         name: str,
         robot_xy: tuple[float, float] = (0.0, 0.0),
-        min_visibility: float = VISIBILITY_DEFAULT,
+        min_visibility: float = 0.0,
     ) -> Optional[Keypoint]:
         """Select best keypoint entry for a given waypoint name.
 
         Selection Rule:
         1. Find all entries for `name`.
-        2. Filter by `visibility >= min_visibility`.
-        3. If matching entries exist, select the one closest to `robot_xy`.
-        4. If none pass `min_visibility`, log a warning and fall back to the
-           entry with highest visibility.
+        2. If `min_visibility <= 0.0` (default), select the entry closest to `robot_xy`.
+        3. Otherwise filter by `visibility >= min_visibility` and select the closest to `robot_xy`,
+           falling back to highest visibility (tie-broken by distance) if none pass.
         """
         entries = self.get_by_name(name)
         if not entries:
             return None
 
-        # Filter by threshold
-        eligible = [kp for kp in entries if kp.visibility >= min_visibility]
-
         rx, ry = robot_xy
+        if min_visibility <= 0.0:
+            entries.sort(key=lambda kp: (math.hypot(kp.x - rx, kp.y - ry), kp.id))
+            return entries[0]
+
+        # Filter by threshold when explicitly requested
+        eligible = [kp for kp in entries if kp.visibility >= min_visibility]
         if eligible:
-            # Sort by Euclidean distance to current robot pose
-            eligible.sort(key=lambda kp: math.hypot(kp.x - rx, kp.y - ry))
+            eligible.sort(key=lambda kp: (math.hypot(kp.x - rx, kp.y - ry), kp.id))
             return eligible[0]
 
-        # Fallback to highest visibility
+        # Fallback to highest visibility (tie-broken by closest Euclidean distance)
         print(
             f"[KeypointStore] [WARN] No entry for '{name}' with visibility >= {min_visibility:.2f}. "
             f"Falling back to highest available visibility."
         )
-        entries.sort(key=lambda kp: kp.visibility, reverse=True)
+        entries.sort(key=lambda kp: (-kp.visibility, math.hypot(kp.x - rx, kp.y - ry), kp.id))
         return entries[0]
 
     def order_greedy(
         self,
         names: list[str],
         start_xy: tuple[float, float] = (0.0, 0.0),
-        min_visibility: float = VISIBILITY_DEFAULT,
+        min_visibility: float = 0.0,
     ) -> list[str]:
         """Greedy nearest-neighbour ordering of point names starting from start_xy."""
         remaining = list(names)

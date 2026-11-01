@@ -58,6 +58,27 @@ class TestCommands(unittest.TestCase):
         res = self.dispatcher.execute("Ping SSH")
         self.assertIn("Ping SSH", res)
 
+    def test_classify_overlays_processed_frame_and_camreset(self):
+        from laptop.llm import llm_api
+        llm_api.set_mock_mode(True)
+        self.cam.start()
+        try:
+            import time
+            time.sleep(0.12)
+            out = self.dispatcher.execute("Classify")
+            self.assertIn("Classification:", out)
+            self.assertIsNotNone(self.mission.last_processed_frame)
+            self.assertTrue(self.mission.last_processed_name.startswith("classified_"))
+
+            meas_out = self.dispatcher.execute("Measure cup")
+            self.assertIn("Measure Result:", meas_out)
+            self.assertTrue(self.mission.last_processed_name.startswith("measure_result_"))
+
+            rst_out = self.dispatcher.execute("CamReset")
+            self.assertIn("mock mode", rst_out)
+        finally:
+            self.cam.stop()
+
 
 if __name__ == "__main__":
     unittest.main()
