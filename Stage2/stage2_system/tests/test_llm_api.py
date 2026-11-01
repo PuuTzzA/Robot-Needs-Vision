@@ -100,5 +100,37 @@ class TestDeepSeekAdapter(unittest.TestCase):
         self.assertFalse(api.health_check()[0])
         self.post.assert_not_called()
 
+class TestEnvLoader(unittest.TestCase):
+    def test_loads_dotenv_with_bom_quotes_and_export(self):
+        import os
+        import tempfile
+        from laptop.llm.env_loader import load_env_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / '.env'
+            # Include UTF-8 BOM, comments, export prefix, and quotes
+            env_file.write_bytes(
+                '\ufeff# Comment line\n'
+                'DEEPSEEK_API_KEY = "sk-from-dotenv"\n'
+                'export EXTRA_TEST_VAR=\'hello\'\n'.encode('utf-8')
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                load_env_files([env_file])
+                self.assertEqual(os.environ.get('DEEPSEEK_API_KEY'), 'sk-from-dotenv')
+                self.assertEqual(os.environ.get('EXTRA_TEST_VAR'), 'hello')
+
+    def test_existing_environ_takes_precedence_over_dotenv(self):
+        import os
+        import tempfile
+        from laptop.llm.env_loader import load_env_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / '.env'
+            env_file.write_text('DEEPSEEK_API_KEY=sk-from-dotenv\n', encoding='utf-8')
+            with patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'sk-from-shell'}, clear=True):
+                load_env_files([env_file])
+                self.assertEqual(os.environ.get('DEEPSEEK_API_KEY'), 'sk-from-shell')
+
+
 if __name__ == '__main__':
     unittest.main()

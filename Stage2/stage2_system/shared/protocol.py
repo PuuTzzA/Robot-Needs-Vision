@@ -167,4 +167,3 @@ class MeasurementResult:
             timing_ms=dict(data.get("timing_ms", {})),
             error_message=data.get("error_message"),
         )
-

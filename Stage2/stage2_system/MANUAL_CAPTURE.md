@@ -16,7 +16,15 @@ an estimate; this is not stereo/depth measurement.
 
 ## Run on Windows
 
-From the repository root in PowerShell:
+Recommended: paste your key once into the git-ignored `Stage2/stage2_system/.env`
+file (`DEEPSEEK_API_KEY=your-key`, copied from `.env.example`), then run:
+
+```powershell
+python -m pip install -r Stage2/stage2_system/requirements-laptop.txt
+python Stage2/stage2_system/laptop/main.py --single-cam 0
+```
+
+Alternatively, prompt for the key per terminal session from the repository root in PowerShell:
 
 ```powershell
 python -m pip install -r Stage2/stage2_system/requirements-laptop.txt

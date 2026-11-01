@@ -30,7 +30,6 @@ Your task is to identify which category the object belongs to.
 
 Known object categories:
 {categories_list}
-*(Note: unexpected objects may occasionally appear, but prefer matching to the known set if appropriate).*
 
 Identify the object category and primary color.
 """
