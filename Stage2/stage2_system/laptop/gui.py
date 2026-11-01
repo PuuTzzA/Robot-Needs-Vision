@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 
 from shared.protocol import RobotStatus
 from .manual_capture import ManualCapture
-from .llm import llm_api
 
 
 class MissionControlGUI:
@@ -162,11 +161,6 @@ class MissionControlGUI:
             padx=6,
         )
         self.lbl_left_hdr.pack(fill="x")
-        self.btn_capture = tk.Button(
-            panel_left_cam, text="Capture & Analyze", command=self._on_capture,
-            font=self.font_header, bg="#2563eb", fg="white", relief="flat", pady=5,
-        )
-        self.btn_capture.pack(fill="x")
         self.canvas_left_cam = tk.Label(panel_left_cam, bg="#111827", text="Waiting for Left Camera...")
         self.canvas_left_cam.pack(fill="both", expand=True)
 
@@ -353,10 +347,6 @@ class MissionControlGUI:
     # Updates & Event Handlers
     # -------------------------------------------------------------------------
 
-    def _on_capture(self) -> None:
-        if not self.m.is_running():
-            self.manual_capture.start(mock=llm_api.is_mock_mode())
-
     def _show_level_results(self) -> None:
         if not self.manual_capture.busy:
             self.manual_capture.result_text = ""
@@ -426,10 +416,6 @@ class MissionControlGUI:
             if kind == "captured":
                 frame, name = value
                 self.m.set_processed_frame(frame, name)
-        self.btn_capture.config(
-            state="disabled" if self.manual_capture.busy or self.m.is_running() else "normal",
-            text="Analyzing..." if self.manual_capture.busy else "Capture & Analyze",
-        )
         self.btn_level_results.config(state="disabled" if self.manual_capture.busy else "normal")
 
         # 1. Update Status & Headers

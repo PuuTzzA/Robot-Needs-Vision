@@ -166,7 +166,7 @@ class TestPanelIntegration(unittest.TestCase):
         gui.manual_capture.busy = False
         gui.manual_capture.result_text = 'Cup, height: 10 cm, color: blue'
         gui.manual_capture.poll.return_value = [('captured', (frame, 'capture.jpg'))]
-        for name in ('root', 'btn_capture', 'btn_level_results', 'lbl_status', 'lbl_level',
+        for name in ('root', 'btn_level_results', 'lbl_status', 'lbl_level',
                      'lbl_extra_info', 'lbl_robot_conn', 'lbl_result', 'lbl_left_hdr',
                      'lbl_right_hdr', 'canvas_left_cam', 'canvas_right_cam', 'lbl_proc_hdr',
                      'canvas_proc', 'canvas_map', 'map_renderer', 'txt_console'):

@@ -107,34 +107,40 @@ cd /data/thomas/Robot-Needs-Vision
 
 ### Step 2: Start ROS 2 & Robot Controller (Ubuntu VM)
 
-The VM side includes a fully automated 1-command bringup script modeled after `auto_nav_bringup.sh`:
+The VM side separates the ROS 2 navigation bringup from the Python robot controller so you can quickly restart `robot_controller.py` without restarting Localization, Nav2, or RViz2:
 
-#### Recommended: Automated 1-Command Bringup
-Open **one terminal** in the Ubuntu VM:
+#### Terminal 1 — Automated Navigation Bringup (`auto_bringup.sh`)
 ```bash
 cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
-chmod +x auto_bringup.sh
+chmod +x auto_bringup.sh start_robot_controller.sh
 ./auto_bringup.sh
 ```
 
 **What this script does automatically (with live status & 300s timeout per step):**
-1. **[1/7] Environment & Stale Node Cleanup**: Sources ROS 2 Humble & workspace, clears lingering FastDDS shared memory, and cleanly terminates leftover nodes.
-2. **[2/7] Hardware Connectivity Verification**: Checks that `/odom` and `/scan` are being actively published by the TurtleBot 4 / Create 3 base.
-3. **[3/7] Localization Bringup**: Launches `map_server` and AMCL with `final_room.yaml` and `localization_params.yaml`.
-4. **[4/7] Nav2 Navigation Stack**: Launches the Nav2 planners, costmaps, and behavior tree navigator with `nav2_params.yaml`.
-5. **[5/7] RViz2 Visualization**: Launches RViz2 with software rendering (`LIBGL_ALWAYS_SOFTWARE=1`) so you can inspect the map and robot.
-6. **[6/7] Manual Initial Pose Confirmation**:
+1. **[1/6] Environment & Stale Node Cleanup**: Sources ROS 2 Humble & workspace and cleanly terminates leftover navigation nodes.
+2. **[2/6] Hardware Connectivity Verification**: Checks that `/odom` and `/scan` are being actively published by the TurtleBot 4 / Create 3 base.
+3. **[3/6] Localization Bringup**: Launches `map_server` and AMCL with `final_room.yaml` and `localization_params.yaml`.
+4. **[4/6] Nav2 Navigation Stack**: Launches the Nav2 planners, costmaps, and behavior tree navigator with `nav2_params.yaml`.
+5. **[5/6] RViz2 Visualization**: Launches RViz2 with software rendering (`LIBGL_ALWAYS_SOFTWARE=1`) so you can inspect the map and robot.
+6. **[6/6] Manual Initial Pose Confirmation**:
    - In RViz, click **2D Pose Estimate** on the top toolbar.
    - Click the robot's real position on the map and drag along its facing heading until the red laser scans align with the map walls.
    - Return to the terminal; the script reads `/amcl_pose` and prompts: `Is the robot correctly localized on the map? [y/N]`. Type `y` and press `Enter` to confirm.
-7. **[7/7] Robot Controller Launch**: Launches `robot_controller.py` with unbuffered output, verifies the HTTP command server binds (port 8070), checks connection to the Nav2 `/navigate_to_pose` action server, and begins streaming live logs.
 
-Press `Ctrl+C` at any time to cleanly stop all nodes and the controller.
+Keep Terminal 1 open (`Ctrl+C` stops Nav2 & RViz).
+
+#### Terminal 2 — Stage 2 Python Robot Controller (`start_robot_controller.sh`)
+Open a **second terminal** in the Ubuntu VM:
+```bash
+cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
+./start_robot_controller.sh
+```
+Press `Ctrl+C` and re-run `./start_robot_controller.sh` in Terminal 2 anytime to quickly restart only the Python controller without restarting Nav2 or RViz.
 
 ---
 
-#### Alternative: Manual / Separate Bringup
-If you prefer running components in separate terminals or Nav2 is already running:
+#### Alternative: Manual / Separate ROS 2 Bringup
+If you prefer running every ROS 2 launch file in its own terminal:
 
 **Terminal 1 — Localization:**
 ```bash
@@ -165,8 +171,6 @@ LIBGL_ALWAYS_SOFTWARE=1 ros2 launch turtlebot4_viz view_robot.launch.py
 ```bash
 cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
 ./start_robot_controller.sh
-# Or using the bringup script in controller-only mode:
-# ./auto_bringup.sh --controller-only
 ```
 
 ---
@@ -176,8 +180,9 @@ On your Windows laptop (in PowerShell or CMD):
 ```powershell
 conda activate phienv
 cd Stage2\stage2_system
-python laptop\main.py --vm auto --left-cam 0 --right-cam 2
+python laptop\main.py --vm auto
 ```
+At startup, a live preview window opens showing **all available cameras** annotated with their IDs and saved `[LEFT]` / `[RIGHT]` assignments. Press **Enter** in the terminal to confirm the saved pair, or type e.g. `left 0, right 2` to reassign and save for next time (pass `--no-cam-select` to skip the prompt).
 
 > **Note on Auto-Discovery**: `--vm auto` automatically searches for the VM via VMware guest IP query and multi-interface UDP broadcast. You can also specify the IP manually:
 > ```powershell

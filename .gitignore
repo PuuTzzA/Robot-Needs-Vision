@@ -68,8 +68,9 @@ __MACOSX/
 *.swo
 *~
 
-# Local environment variables and API keys
+# Local environment variables, API keys, and saved camera IDs
 .env
 .env.*
 !.env.example
+.camera_config.json
 

@@ -555,7 +555,7 @@ class RobotController:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 2 Robot Controller (Ubuntu VM)")
     script_dir = Path(__file__).resolve().parent
-    stage2_maps = script_dir.parent / "vm_map_tools" / "maps"
+    stage2_maps = script_dir.parent.parent / "vm_map_tools" / "maps"
     default_pts = stage2_maps / "stage2_keypoints.json"
     default_map = stage2_maps / "final_room.yaml"
 

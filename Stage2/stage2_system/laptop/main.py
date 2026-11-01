@@ -1,7 +1,8 @@
 """Main entry point for Windows Mission Control (Stage 2).
 
-Launches the GUI dashboard, initializes stereo camera grabbing, connects to
-the VM robot controller and SSH size server, and runs autonomous perception workflows.
+Launches interactive stereo camera selection, initializes the GUI dashboard and
+stereo camera grabbing, connects to the VM robot controller and SSH size server,
+and runs autonomous perception workflows.
 """
 
 from __future__ import annotations
@@ -23,6 +24,11 @@ from shared.protocol import (
     DEFAULT_VM_CMD_PORT,
 )
 from laptop.camera import CameraManager
+from laptop.camera_selector import (
+    DEFAULT_CONFIG_FILENAME,
+    load_camera_config,
+    select_stereo_cameras,
+)
 from laptop.commands import CommandDispatcher
 from laptop.console import ConsoleRedirector
 from laptop.gui import MissionControlGUI
@@ -81,9 +87,24 @@ def parse_args() -> argparse.Namespace:
     )
 
     # Stereo Camera Arguments
-    parser.add_argument("--left-cam", type=int, default=0, help="Device index of left webcam (default: 0).")
-    parser.add_argument("--right-cam", type=int, default=2, help="Device index of right webcam (default: 2).")
+    parser.add_argument(
+        "--left-cam",
+        type=int,
+        default=None,
+        help="Device index of left webcam (default: loaded from saved config or 0).",
+    )
+    parser.add_argument(
+        "--right-cam",
+        type=int,
+        default=None,
+        help="Device index of right webcam (default: loaded from saved config or 2).",
+    )
     parser.add_argument("--single-cam", type=int, default=None, help="Device index for single camera mode.")
+    parser.add_argument(
+        "--no-cam-select",
+        action="store_true",
+        help="Skip interactive startup camera preview/selection and use saved/CLI camera IDs directly.",
+    )
     parser.add_argument("--width", type=int, default=1280, help="Capture width (default: 1280).")
     parser.add_argument("--height", type=int, default=720, help="Capture height (default: 720).")
     parser.add_argument("--fps", type=float, default=30.0, help="Target capture FPS (default: 30.0).")
@@ -101,6 +122,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    # 0. Interactive stereo camera selection (before redirecting stdout/stderr or opening Tkinter)
+    cam_config_path = sys_root / DEFAULT_CONFIG_FILENAME
+    saved_left, saved_right = load_camera_config(cam_config_path)
+    left_cam = args.left_cam if args.left_cam is not None else saved_left
+    right_cam = args.right_cam if args.right_cam is not None else saved_right
+
+    if not args.mock_camera and args.single_cam is None and not args.no_cam_select:
+        try:
+            left_cam, right_cam = select_stereo_cameras(
+                config_path=cam_config_path,
+                cli_left=args.left_cam,
+                cli_right=args.right_cam,
+            )
+        except KeyboardInterrupt:
+            print("\n[Setup] Startup cancelled during camera selection.")
+            return
+
     # 1. Initialize Console Redirector
     log_dir = sys_root / "runs"
     console = ConsoleRedirector(log_dir=log_dir)
@@ -110,6 +148,8 @@ def main() -> None:
     print("  STAGE 2 AUTONOMOUS MISSION CONTROL (WINDOWS)")
     print(f"  VM Target: {args.vm}:{args.vm_port} | SSH Size Server: {args.ssh_url}")
     print(f"  Keypoints: {args.points.name} | Map: {args.map.name}")
+    if not args.mock_camera and args.single_cam is None:
+        print(f"  Stereo Cameras: Left = {left_cam}, Right = {right_cam}")
     print("=" * 70)
 
     # Configure LLM mode
@@ -126,8 +166,8 @@ def main() -> None:
 
     # 3. Initialize Camera
     camera = CameraManager(
-        left_cam=args.left_cam,
-        right_cam=args.right_cam,
+        left_cam=left_cam,
+        right_cam=right_cam,
         single_cam=args.single_cam,
         width=args.width,
         height=args.height,
@@ -184,4 +224,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
