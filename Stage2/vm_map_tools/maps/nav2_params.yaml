@@ -116,7 +116,7 @@ controller_server:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.1    # Position tolerance in meters (Tuned: 0.05m = 5cm | Default: 0.25m = 25cm)
-      yaw_goal_tolerance: 0.06   # Heading tolerance in radians (Tuned: 0.06 rad ≈ 3.4° | Default: 0.25 rad ≈ 14.3°)
+      yaw_goal_tolerance: 0.1   # Heading tolerance in radians (Tuned: 0.06 rad ≈ 3.4° | Default: 0.25 rad ≈ 14.3°)
 
     # DWB parameters
     FollowPath:

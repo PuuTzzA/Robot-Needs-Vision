@@ -19,7 +19,7 @@ A dedicated tool for Stage 2 on Ubuntu that pairs real-time camera inspection wi
 
 ### Autostart
 ```bash
-cd ~/Robot-Needs-Vision/Stage2/vm_map_tools ./auto_nav_bringup.sh
+cd ~/Robot-Needs-Vision/Stage2/vm_map_tools && ./auto_nav_bringup.sh
 ```
 
 ### Step 0: VMware Network Configuration

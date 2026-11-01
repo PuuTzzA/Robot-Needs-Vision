@@ -1,7 +1,7 @@
 {
   "map_file": "final_room.yaml",
   "map_sha256": "bb1a6deca3869f4afe30f565fa90920d1c3c43f0c8e8f16fe453a5c406f2a3ac",
-  "updated_at": "2026-10-29 11:03:41",
+  "updated_at": "2026-11-01 07:38:43",
   "keypoints": [
     {
       "id": 0,
@@ -172,30 +172,6 @@
       "snapshot": "snapshots/keypoint_012_H.jpg"
     },
     {
-      "id": 7,
-      "name": "G",
-      "x": 0.598,
-      "y": 7.4256,
-      "yaw_degrees": -12.26,
-      "position": {
-        "x": 0.598,
-        "y": 7.4256,
-        "z": 0.0
-      },
-      "rotation": {
-        "yaw_degrees": -12.26,
-        "quaternion": {
-          "x": 0.0008016649384339957,
-          "y": 0.0006309777931170924,
-          "z": -0.10682601343822484,
-          "w": 0.9942772058401255
-        }
-      },
-      "visibility": 0.5,
-      "timestamp": 1793271620.055949,
-      "snapshot": "snapshots/keypoint_013_G.jpg"
-    },
-    {
       "id": 8,
       "name": "I",
       "x": 3.6689,
@@ -242,6 +218,54 @@
       "visibility": 0.5,
       "timestamp": 1793271773.3579106,
       "snapshot": "snapshots/keypoint_015_F.jpg"
+    },
+    {
+      "id": 10,
+      "name": "G",
+      "x": 0.2656,
+      "y": 7.451,
+      "yaw_degrees": -12.94,
+      "position": {
+        "x": 0.2656,
+        "y": 7.451,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -12.94,
+        "quaternion": {
+          "x": -0.0015284603954541565,
+          "y": 9.661501700094711e-05,
+          "z": -0.1127022544009594,
+          "w": 0.9936276245793992
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793518587.2598712,
+      "snapshot": "snapshots/keypoint_010_G.jpg"
+    },
+    {
+      "id": 11,
+      "name": "B",
+      "x": 1.0087,
+      "y": 7.6813,
+      "yaw_degrees": 14.08,
+      "position": {
+        "x": 1.0087,
+        "y": 7.6813,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": 14.08,
+        "quaternion": {
+          "x": -0.0003695892673928613,
+          "y": 2.197785663047127e-05,
+          "z": 0.12257658457774984,
+          "w": 0.9924589884897013
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793518723.2163112,
+      "snapshot": "snapshots/keypoint_011_B.jpg"
     }
   ]
 }
