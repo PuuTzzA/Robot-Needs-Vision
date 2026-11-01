@@ -26,12 +26,12 @@
 
         <!-- Default DataReader profile: Prevents "Problem reserving CacheChange in reader" -->
         <data_reader profile_name="default_reader_profile" is_default_profile="true">
-            <historyMemoryPolicy>DYNAMIC_RESERVE</historyMemoryPolicy>
+            <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
         </data_reader>
 
         <!-- Default DataWriter profile -->
         <data_writer profile_name="default_writer_profile" is_default_profile="true">
-            <historyMemoryPolicy>DYNAMIC_RESERVE</historyMemoryPolicy>
+            <historyMemoryPolicy>DYNAMIC</historyMemoryPolicy>
         </data_writer>
     </profiles>
 </dds>
