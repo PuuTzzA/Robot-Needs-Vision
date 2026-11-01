@@ -98,10 +98,10 @@ The architecture coordinates three separate execution nodes communicating over l
 ### Step 1: Start Remote GPU Size Server (SSH Server)
 On the remote NVIDIA RTX 4090 GPU machine:
 ```bash
-cd ~/Robot-Needs-Vision/Stage2/stage2_system/ssh
-./run_size_server.sh --port 8082 --device cuda:0
+cd /data/thomas/Robot-Needs-Vision
+./Stage2/stage2_system/ssh/run_size_server.sh --port 8082 --device cuda:0
 ```
-*(In VS Code, ensure port **8082** is forwarded to `localhost:8082` on your Windows machine).*
+*(If `ultralytics` has not been installed into `.venv` yet, run `.venv/bin/python -m pip install -r Stage2/stage2_system/requirements-ssh.txt` once first. In VS Code, ensure port **8082** is forwarded to `localhost:8082` on your Windows machine).*
 
 ---
 
