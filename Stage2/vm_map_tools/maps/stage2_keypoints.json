@@ -242,30 +242,6 @@
       "visibility": 0.5,
       "timestamp": 1793518587.2598712,
       "snapshot": "snapshots/keypoint_010_G.jpg"
-    },
-    {
-      "id": 11,
-      "name": "B",
-      "x": 1.0087,
-      "y": 7.6813,
-      "yaw_degrees": 14.08,
-      "position": {
-        "x": 1.0087,
-        "y": 7.6813,
-        "z": 0.0
-      },
-      "rotation": {
-        "yaw_degrees": 14.08,
-        "quaternion": {
-          "x": -0.0003695892673928613,
-          "y": 2.197785663047127e-05,
-          "z": 0.12257658457774984,
-          "w": 0.9924589884897013
-        }
-      },
-      "visibility": 0.5,
-      "timestamp": 1793518723.2163112,
-      "snapshot": "snapshots/keypoint_011_B.jpg"
     }
   ]
 }
