@@ -1,7 +1,7 @@
 {
   "map_file": "final_room.yaml",
   "map_sha256": "bb1a6deca3869f4afe30f565fa90920d1c3c43f0c8e8f16fe453a5c406f2a3ac",
-  "updated_at": "2026-11-01 07:38:43",
+  "updated_at": "2026-11-01 12:11:11",
   "keypoints": [
     {
       "id": 0,
@@ -172,30 +172,6 @@
       "snapshot": "snapshots/keypoint_012_H.jpg"
     },
     {
-      "id": 8,
-      "name": "I",
-      "x": 3.6689,
-      "y": 10.7774,
-      "yaw_degrees": -128.69,
-      "position": {
-        "x": 3.6689,
-        "y": 10.7774,
-        "z": 0.0
-      },
-      "rotation": {
-        "yaw_degrees": -128.69,
-        "quaternion": {
-          "x": -0.00034272394848940894,
-          "y": 8.662332063257834e-05,
-          "z": 0.901405141732434,
-          "w": -0.43297649531472954
-        }
-      },
-      "visibility": 0.5,
-      "timestamp": 1793271720.4506655,
-      "snapshot": "snapshots/keypoint_014_I.jpg"
-    },
-    {
       "id": 9,
       "name": "F",
       "x": 4.7476,
@@ -242,6 +218,30 @@
       "visibility": 0.5,
       "timestamp": 1793518587.2598712,
       "snapshot": "snapshots/keypoint_010_G.jpg"
+    },
+    {
+      "id": 11,
+      "name": "I",
+      "x": 3.5884,
+      "y": 11.1642,
+      "yaw_degrees": -112.87,
+      "position": {
+        "x": 3.5884,
+        "y": 11.1642,
+        "z": 0.0
+      },
+      "rotation": {
+        "yaw_degrees": -112.87,
+        "quaternion": {
+          "x": -0.0002505481587075534,
+          "y": 0.0005798471026044138,
+          "z": -0.8332829680673818,
+          "w": 0.5528463585226662
+        }
+      },
+      "visibility": 0.5,
+      "timestamp": 1793535060.4899316,
+      "snapshot": "snapshots/keypoint_011_I.jpg"
     }
   ]
 }
