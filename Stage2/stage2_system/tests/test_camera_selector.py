@@ -164,6 +164,21 @@ class TestZoomedMapRenderer(unittest.TestCase):
             )
             self.assertEqual(out.size, (440, 260))
 
+    def test_map_rectangular_fills_target_size(self):
+        """Verifies that map rendering fills the entire rectangular space (e.g. 560x376) without borders."""
+        renderer = MapRenderer(map_info=None, view_size_m=2.5)
+        status = RobotStatus(localized=True, x=2.0, y=3.0, yaw_deg=45.0)
+        target_size = (560, 376)
+        out = renderer.render(keypoints=[], robot_status=status, target_size=target_size)
+        self.assertEqual(out.size, target_size)
+
+        out_np = np.array(out)
+        # Robot center must be at exact center of target_size: (560 // 2 = 280, 376 // 2 = 188)
+        cx = target_size[0] // 2
+        cy = target_size[1] // 2
+        # Yellow heading arrow originates at (cx, cy), cyan body surrounds it
+        self.assertEqual(tuple(int(c) for c in out_np[cy, cx]), (255, 240, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,25 +117,23 @@ chmod +x auto_bringup.sh start_robot_controller.sh
 ```
 
 **What this script does automatically (with live status & 300s timeout per step):**
-1. **[1/6] Environment & Stale Node Cleanup**: Sources ROS 2 Humble & workspace and cleanly terminates leftover navigation nodes.
-2. **[2/6] Hardware Connectivity Verification**: Checks that `/odom` and `/scan` are being actively published by the TurtleBot 4 / Create 3 base.
-3. **[3/6] Localization Bringup**: Launches `map_server` and AMCL with `final_room.yaml` and `localization_params.yaml`.
-4. **[4/6] Nav2 Navigation Stack**: Launches the Nav2 planners, costmaps, and behavior tree navigator with `nav2_params.yaml`.
-5. **[5/6] RViz2 Visualization**: Launches RViz2 with software rendering (`LIBGL_ALWAYS_SOFTWARE=1`) so you can inspect the map and robot.
-6. **[6/6] Manual Initial Pose Confirmation**:
-   - In RViz, click **2D Pose Estimate** on the top toolbar.
-   - Click the robot's real position on the map and drag along its facing heading until the red laser scans align with the map walls.
-   - Return to the terminal; the script reads `/amcl_pose` and prompts: `Is the robot correctly localized on the map? [y/N]`. Type `y` and press `Enter` to confirm.
+1. **[1/5] Environment & Stale Node Cleanup**: Sources ROS 2 Humble & workspace and cleanly terminates leftover navigation nodes.
+2. **[2/5] Hardware Connectivity Verification**: Checks that `/odom` and `/scan` are being actively published by the TurtleBot 4 / Create 3 base.
+3. **[3/5] Localization Bringup**: Launches `map_server` and AMCL with `final_room.yaml` and `localization_params.yaml`.
+4. **[4/5] Nav2 Navigation Stack**: Launches the Nav2 planners, costmaps, and behavior tree navigator with `nav2_params.yaml`.
+5. **[5/5] RViz2 Visualization**: Launches RViz2 with software rendering (`LIBGL_ALWAYS_SOFTWARE=1`) so you can inspect the map and robot.
 
 Keep Terminal 1 open (`Ctrl+C` stops Nav2 & RViz).
 
-#### Terminal 2 — Stage 2 Python Robot Controller (`start_robot_controller.sh`)
+#### Terminal 2 — Initial Pose Confirmation & Stage 2 Python Controller (`start_robot_controller.sh`)
 Open a **second terminal** in the Ubuntu VM:
 ```bash
 cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
 ./start_robot_controller.sh
 ```
-Press `Ctrl+C` and re-run `./start_robot_controller.sh` in Terminal 2 anytime to quickly restart only the Python controller without restarting Nav2 or RViz.
+1. Verifies Nav2 `/navigate_to_pose` action server readiness.
+2. Prompts you to click **2D Pose Estimate** in RViz, align the red laser dots with the map walls, press **Enter** to view the live `(x, y, yaw°)` pose, and confirm `[y/N]` (automatically clearing Nav2 costmaps).
+3. Whenever you carry the robot back to the start to restart a task, either type `p` + **Enter** in Terminal 2 to re-confirm the new RViz pose in place, or press `Ctrl+C` and re-run `./start_robot_controller.sh` — without restarting Terminal 1.
 
 ---
 

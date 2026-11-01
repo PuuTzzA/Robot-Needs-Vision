@@ -3,12 +3,16 @@
 
 Receives navigation and teleop commands from Windows Mission Control over HTTP,
 executes Nav2 NavigateToPose actions and Twist velocity commands, tracks map
-localization via ROS 2 TF, and pushes periodic status pings to the laptop.
+localization via ROS 2 TF + /amcl_pose, walks through RViz 2D Pose Estimate
+confirmation (with Nav2 costmap clearing), and pushes periodic status pings to
+the laptop.
 
 Features:
 - Nav2 action client for autonomous waypoint navigation
+- Interactive RViz 2D Pose Estimate confirmation + runtime 'p' re-pose shortcut
+- Automatic Nav2 local & global costmap clearing upon pose confirmation
 - Short-burst `/cmd_vel` teleop publisher
-- Real-time map pose tracking via ROS 2 TF (/tf map -> base_link)
+- Real-time map pose tracking via ROS 2 TF (/tf map -> base_link) and /amcl_pose
 - HTTP REST API for commands (/api/goto, /api/teleop, /api/cancel)
 - Periodic status pusher (2 Hz) to registered laptop IP/port
 - UDP discovery beacon on port 8079
@@ -19,20 +23,17 @@ from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import asdict
 import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import math
-import os
 from pathlib import Path
-import queue
 import socket
 import socketserver
 import sys
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # Check ROS 2 availability
 try:
@@ -40,13 +41,21 @@ try:
     from rclpy.action import ActionClient
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from action_msgs.msg import GoalStatus
-    from geometry_msgs.msg import PoseStamped, Twist
+    from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
     from nav2_msgs.action import NavigateToPose
     from tf2_ros import Buffer, TransformListener
+
+    try:
+        from nav2_msgs.srv import ClearEntireCostmap
+    except ImportError:
+        ClearEntireCostmap = None  # type: ignore
+
     ROS_AVAILABLE = True
 except ImportError:
     ROS_AVAILABLE = False
+    ClearEntireCostmap = None  # type: ignore
 
 # Import shared modules
 try:
@@ -77,6 +86,14 @@ except ImportError:
     )
 
 
+def _quat_to_yaw_deg(qx: float, qy: float, qz: float, qw: float) -> Optional[float]:
+    norm = math.hypot(qx, qy, qz, qw)
+    if norm < 1e-9:
+        return None
+    rx, ry, rz, rw = qx / norm, qy / norm, qz / norm, qw / norm
+    return math.degrees(math.atan2(2.0 * (rw * rz + rx * ry), 1.0 - 2.0 * (ry * ry + rz * rz)))
+
+
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -99,6 +116,7 @@ class ControllerHttpHandler(BaseHTTPRequestHandler):
                 "version": "2.0",
                 "ros_available": ROS_AVAILABLE,
                 "sim_mode": self.controller.sim_mode,
+                "pose_confirmed": self.controller.pose_confirmed,
                 "keypoints_sha": self.controller.keypoints.sha256,
             }
             self._send_json(data)
@@ -127,7 +145,6 @@ class ControllerHttpHandler(BaseHTTPRequestHandler):
             payload = {}
 
         if self.path == "/api/register":
-            # Caller wants status pings sent back
             caller_ip = self.client_address[0]
             ping_port = int(payload.get("ping_port", DEFAULT_LAPTOP_PING_PORT))
             self.controller.register_laptop(caller_ip, ping_port)
@@ -154,7 +171,7 @@ class ControllerHttpHandler(BaseHTTPRequestHandler):
         body = json.dumps(data).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(body_len := len(body)))
         self.end_headers()
         self.wfile.write(body)
 
@@ -172,11 +189,13 @@ class RobotController:
         cmd_port: int = DEFAULT_VM_CMD_PORT,
         beacon_port: int = DEFAULT_VM_BEACON_PORT,
         sim_mode: bool = False,
+        pose_confirmed: bool = True,
     ) -> None:
         self.cmd_port = cmd_port
         self.beacon_port = beacon_port
         self.sim_mode = sim_mode or (not ROS_AVAILABLE)
         self.sim_speed = 3.0
+        self.pose_confirmed = bool(pose_confirmed)
 
         # In-place keypoint and map store
         self.keypoints = KeypointStore(file_path=points_path)
@@ -200,14 +219,21 @@ class RobotController:
         self.sim_yaw = 0.0
         self.sim_target_xy: Optional[tuple[float, float, float]] = None
 
+        # Latest /amcl_pose cache (used as immediate fallback alongside TF lookup)
+        self._amcl_pose_lock = threading.Lock()
+        self._latest_amcl_pose: Optional[tuple[float, float, float]] = None
+
         # ROS 2 Node components
         self.node = None
         self.executor = None
         self.tf_buffer = None
         self.tf_listener = None
+        self.amcl_sub = None
         self.nav_client = None
         self.goal_handle = None
         self.cmd_vel_pub = None
+        self._clear_local_costmap_cli = None
+        self._clear_global_costmap_cli = None
 
         if not self.sim_mode:
             self._init_ros2()
@@ -225,9 +251,11 @@ class RobotController:
         self._ping_thread = None
         self._exec_thread = None
         self._tick_thread = None
+        self._spin_thread = None
 
     def _init_ros2(self) -> None:
-        rclpy.init()
+        if not rclpy.ok():
+            rclpy.init()
         self.node = Node("stage2_robot_controller")
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self.node)
@@ -235,7 +263,39 @@ class RobotController:
         self.cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.node)
+
+        amcl_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.amcl_sub = self.node.create_subscription(
+            PoseWithCovarianceStamped,
+            "/amcl_pose",
+            self._on_amcl_pose,
+            amcl_qos,
+        )
+
+        if ClearEntireCostmap is not None:
+            self._clear_local_costmap_cli = self.node.create_client(
+                ClearEntireCostmap, "/local_costmap/clear_entirely_local_costmap"
+            )
+            self._clear_global_costmap_cli = self.node.create_client(
+                ClearEntireCostmap, "/global_costmap/clear_entirely_global_costmap"
+            )
+
         print("[RobotController] ROS 2 Humble node and Nav2 ActionClient initialized.")
+
+    def _on_amcl_pose(self, msg: Any) -> None:
+        try:
+            pos = msg.pose.pose.position
+            ori = msg.pose.pose.orientation
+            yaw = _quat_to_yaw_deg(ori.x, ori.y, ori.z, ori.w)
+            if yaw is not None:
+                with self._amcl_pose_lock:
+                    self._latest_amcl_pose = (float(pos.x), float(pos.y), yaw)
+        except Exception:
+            pass
 
     def start(self) -> None:
         self._start_http_server()
@@ -268,6 +328,10 @@ class RobotController:
         self._tick_thread = threading.Thread(target=tick_loop, daemon=True)
         self._tick_thread.start()
 
+    def _start_spin_thread(self) -> None:
+        """Backward-compatible alias for starting tick loop."""
+        self._start_tick_thread()
+
     def _start_http_server(self) -> None:
         for port in [self.cmd_port, 8075, 8076]:
             try:
@@ -284,7 +348,7 @@ class RobotController:
         print(f"[RobotController] [ERROR] Could not bind command port {self.cmd_port}!")
 
     def _start_udp_beacon(self) -> None:
-        def beacon_loop():
+        def beacon_loop() -> None:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -307,7 +371,7 @@ class RobotController:
         self._beacon_thread.start()
 
     def _start_status_pusher(self) -> None:
-        def push_loop():
+        def push_loop() -> None:
             while self._running:
                 time.sleep(0.5)  # 2 Hz
                 if not self.registered_laptop_ip:
@@ -340,7 +404,7 @@ class RobotController:
         print(f"[RobotController] Registered Windows Mission Control at {ip}:{port} for status pings.")
 
     def get_robot_pose(self) -> tuple[bool, float, float, float]:
-        """Query TF or simulation pose: (localized, x, y, yaw_deg)."""
+        """Query TF (or /amcl_pose fallback) or simulation pose: (localized, x, y, yaw_deg)."""
         if self.sim_mode or self.node is None or self.tf_buffer is None:
             return True, self.sim_x, self.sim_y, self.sim_yaw
 
@@ -354,20 +418,27 @@ class RobotController:
                 )
                 trans = t.transform.translation
                 rot = t.transform.rotation
-                norm = math.hypot(rot.x, rot.y, rot.z, rot.w)
-                if norm < 1e-9:
+                yaw = _quat_to_yaw_deg(rot.x, rot.y, rot.z, rot.w)
+                if yaw is None:
                     continue
-                rx, ry, rz, rw = rot.x / norm, rot.y / norm, rot.z / norm, rot.w / norm
-                yaw = math.degrees(math.atan2(2 * (rw * rz + rx * ry), 1 - 2 * (ry * ry + rz * rz)))
-                return True, trans.x, trans.y, yaw
+                return True, float(trans.x), float(trans.y), yaw
             except Exception:
                 continue
+
+        with self._amcl_pose_lock:
+            if self._latest_amcl_pose is not None:
+                ax, ay, ayaw = self._latest_amcl_pose
+                return True, ax, ay, ayaw
 
         return False, 0.0, 0.0, 0.0
 
     def get_status(self) -> RobotStatus:
         loc, x, y, yaw = self.get_robot_pose()
-        nav2_ready = True if self.sim_mode else (self.nav_client.server_is_ready() if self.nav_client else False)
+        nav2_ready = (
+            True
+            if self.sim_mode
+            else (bool(self.nav_client and self.nav_client.server_is_ready()) and self.pose_confirmed)
+        )
         return RobotStatus(
             t=time.time(),
             localized=loc,
@@ -398,10 +469,133 @@ class RobotController:
         return {"meta": meta, "pgm_b64": b64}
 
     # -------------------------------------------------------------------------
+    # Nav2 Readiness, Initial Pose Confirmation & Costmap Reset
+    # -------------------------------------------------------------------------
+
+    def wait_for_nav2_ready(self, timeout_s: float = 300.0) -> bool:
+        """Wait until the Nav2 /navigate_to_pose action server is reachable."""
+        if self.sim_mode:
+            return True
+        if self.nav_client is None:
+            return False
+
+        start_t = time.monotonic()
+        warned = False
+        while self._running:
+            if self.nav_client.server_is_ready():
+                elapsed = time.monotonic() - start_t
+                print(
+                    f"\r  [OK] Nav2 /navigate_to_pose action server is ONLINE ({elapsed:.1f}s).             "
+                )
+                return True
+
+            elapsed = time.monotonic() - start_t
+            if elapsed >= timeout_s:
+                print(f"\n  [ERROR] Timed out waiting {timeout_s:.0f}s for Nav2 /navigate_to_pose server.")
+                return False
+
+            if elapsed >= 5.0 and not warned:
+                print(
+                    "\n  [INFO] Still waiting for Nav2 -- make sure './auto_bringup.sh' finished Steps 1-5 in Terminal 1."
+                )
+                warned = True
+
+            sys.stdout.write(
+                f"\r  [WAIT] [{int(elapsed):3d}s/{int(timeout_s)}s] Waiting for Nav2 /navigate_to_pose action server..."
+            )
+            sys.stdout.flush()
+            time.sleep(0.5)
+
+        return False
+
+    def clear_costmaps(self, timeout_s: float = 1.5) -> None:
+        """Clear Nav2 local and global costmaps (removes stale obstacles after moving robot by hand)."""
+        if self.sim_mode or ClearEntireCostmap is None:
+            return
+
+        futures = []
+        for label, cli in (
+            ("local_costmap", self._clear_local_costmap_cli),
+            ("global_costmap", self._clear_global_costmap_cli),
+        ):
+            if cli is not None and cli.service_is_ready():
+                try:
+                    futures.append((label, cli.call_async(ClearEntireCostmap.Request())))
+                except Exception:
+                    pass
+
+        if not futures:
+            return
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if all(f.done() for _, f in futures):
+                break
+            time.sleep(0.03)
+
+    def confirm_initial_pose_interactive(
+        self,
+        input_fn: Callable[[str], str] = input,
+        settle_delay_s: float = 0.25,
+    ) -> bool:
+        """Prompt user to set 2D Pose Estimate in RViz, display live pose, and confirm [y/N]."""
+        if self.nav_state == "navigating":
+            self.request_cancel()
+        self.pose_confirmed = False
+
+        print("\n" + "-" * 70)
+        print("  [Initial Pose] Set & Confirm the Robot's Pose in RViz")
+        print("  1. In RViz, click '2D Pose Estimate' on the top toolbar.")
+        print("  2. Click the robot's real position on the map and drag in the direction it faces.")
+        print("  3. Check that the laser scan (red dots) lines up with the map walls.")
+        print("  4. Come back to this terminal and press Enter to confirm.")
+        print("-" * 70)
+
+        while self._running:
+            ans = input_fn(
+                "\n  -> Press Enter once the initial pose is set in RViz (or type 'q' to abort): "
+            ).strip()
+            if ans.lower() == "q":
+                raise KeyboardInterrupt("Aborted by user at initial pose confirmation.")
+
+            if not self.sim_mode and settle_delay_s > 0:
+                time.sleep(settle_delay_s)
+
+            loc, rx, ry, ryaw = self.get_robot_pose()
+            if loc:
+                print(f"  * Robot pose (map): x={rx:.2f} m, y={ry:.2f} m, yaw={ryaw:.1f} deg")
+                if not self.sim_mode and abs(rx) < 0.05 and abs(ry) < 0.05 and abs(ryaw) < 0.5:
+                    print(
+                        "  [WARN] Pose is still near (0.00, 0.00, 0.0 deg) -- did you click '2D Pose Estimate' in RViz?"
+                    )
+            else:
+                print(
+                    "  [WARN] Could not read robot pose yet (set '2D Pose Estimate' in RViz first)."
+                )
+
+            confirm = input_fn("  -> Is the robot correctly localized on the map? [y/N]: ").strip().lower()
+            if confirm in ("y", "yes"):
+                self.clear_costmaps()
+                self.pose_confirmed = True
+                print("  [OK] Initial pose confirmed (Nav2 costmaps cleared).")
+                return True
+
+            print("  Okay -- set the pose again with '2D Pose Estimate' in RViz, then press Enter.")
+
+        return False
+
+    # -------------------------------------------------------------------------
     # Navigation & Teleop Handlers
     # -------------------------------------------------------------------------
 
     def request_goto(self, keypoint_id: int) -> tuple[bool, int, str]:
+        if not self.pose_confirmed:
+            return (
+                False,
+                0,
+                "Initial pose not confirmed yet -- confirm [y/N] in the VM robot_controller terminal first",
+            )
+
         kp = self.keypoints.get_by_id(keypoint_id)
         if not kp:
             return False, 0, f"Keypoint ID {keypoint_id} not found"
@@ -573,6 +767,11 @@ class RobotController:
                 self.executor.shutdown()
             except Exception:
                 pass
+        if self._beacon_sock:
+            try:
+                self._beacon_sock.close()
+            except Exception:
+                pass
         if self.node and ROS_AVAILABLE:
             try:
                 self.node.destroy_node()
@@ -592,15 +791,38 @@ def main() -> None:
     default_pts = stage2_maps / "stage2_keypoints.json"
     default_map = stage2_maps / "final_room.yaml"
 
-    parser.add_argument("--points", type=Path, default=default_pts, help=f"Path to keypoints JSON (default: {default_pts})")
-    parser.add_argument("--map", type=Path, default=default_map, help=f"Path to map YAML (default: {default_map})")
-    parser.add_argument("--port", type=int, default=DEFAULT_VM_CMD_PORT, help=f"Command port (default: {DEFAULT_VM_CMD_PORT})")
+    parser.add_argument(
+        "--points", type=Path, default=default_pts, help=f"Path to keypoints JSON (default: {default_pts})"
+    )
+    parser.add_argument(
+        "--map", type=Path, default=default_map, help=f"Path to map YAML (default: {default_map})"
+    )
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_VM_CMD_PORT, help=f"Command port (default: {DEFAULT_VM_CMD_PORT})"
+    )
     parser.add_argument("--sim", action="store_true", help="Run in kinematic simulation mode without ROS 2")
+    parser.add_argument(
+        "--skip-pose-confirm",
+        action="store_true",
+        help="Skip interactive RViz 2D Pose Estimate confirmation at startup.",
+    )
     args = parser.parse_args()
+
+    if not args.sim and not ROS_AVAILABLE:
+        print("=" * 70)
+        print("  [ERROR] ROS 2 Humble (rclpy) is not sourced in this terminal!")
+        print("  Start the controller via:")
+        print(f"    cd {script_dir} && ./start_robot_controller.sh")
+        print("  (Or pass --sim for offline kinematic simulation.)")
+        print("=" * 70)
+        sys.exit(1)
+
+    interactive_tty = bool(sys.stdin is not None and sys.stdin.isatty())
+    need_pose_confirm = (not args.sim) and (not args.skip_pose_confirm) and interactive_tty
 
     print("=" * 70)
     print("  STAGE 2 ROBOT CONTROLLER (UBUNTU VM)")
-    print(f"  Mode: {'SIMULATION' if args.sim or not ROS_AVAILABLE else 'ROS 2 HUMBLE'}")
+    print(f"  Mode: {'SIMULATION' if args.sim else 'ROS 2 HUMBLE'}")
     print(f"  Keypoints: {args.points.name} | Command Port: {args.port}")
     print("=" * 70)
 
@@ -609,13 +831,44 @@ def main() -> None:
         map_path=args.map,
         cmd_port=args.port,
         sim_mode=args.sim,
+        pose_confirmed=(not need_pose_confirm),
     )
     controller.start()
 
-    print("[Ready] Robot Controller active. Waiting for commands from Windows Mission Control...")
     try:
+        if not args.sim:
+            if not controller.wait_for_nav2_ready(timeout_s=300.0):
+                sys.exit(1)
+
+        if need_pose_confirm:
+            controller.confirm_initial_pose_interactive()
+
+        print(
+            f"\n[Ready] Robot Controller active on port {controller.cmd_port}. "
+            "Waiting for commands from Windows Mission Control..."
+        )
+        if interactive_tty:
+            print(
+                "        Tip: Carry robot back to start? Type 'p' + Enter here to reset & confirm pose\n"
+                "             (or press Ctrl+C and re-run ./start_robot_controller.sh)."
+            )
+
         while True:
-            time.sleep(0.5)
+            if interactive_tty:
+                try:
+                    cmd = input().strip().lower()
+                except EOFError:
+                    interactive_tty = False
+                    continue
+                if cmd in ("p", "pose", "repose"):
+                    controller.confirm_initial_pose_interactive()
+                    print(
+                        f"\n[Ready] Pose updated! Robot Controller active on port {controller.cmd_port}..."
+                    )
+                elif cmd in ("q", "quit", "exit"):
+                    break
+            else:
+                time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n[RobotController] Interrupted by user.")
     finally:

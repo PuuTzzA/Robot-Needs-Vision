@@ -77,11 +77,13 @@ class MissionControlGUI:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Periodic GUI update loop
+        self._after_id: Optional[str] = None
         self._update_loop()
 
     def _build_styles(self) -> None:
         self.font_title = tkfont.Font(family="Segoe UI", size=22, weight="bold")
         self.font_subtitle = tkfont.Font(family="Segoe UI", size=13, weight="bold")
+        self.font_result_compact = tkfont.Font(family="Segoe UI", size=11, weight="bold")
         self.font_header = tkfont.Font(family="Segoe UI", size=10, weight="bold")
         self.font_body = tkfont.Font(family="Segoe UI", size=10)
         self.font_console = tkfont.Font(family="Consolas", size=9)
@@ -161,7 +163,10 @@ class MissionControlGUI:
             padx=6,
         )
         self.lbl_left_hdr.pack(fill="x")
-        self.canvas_left_cam = tk.Label(panel_left_cam, bg="#111827", text="Waiting for Left Camera...")
+        self.canvas_left_cam = tk.Label(
+            panel_left_cam, bg="#111827", text="Waiting for Left Camera...",
+            bd=0, highlightthickness=0, padx=0, pady=0
+        )
         self.canvas_left_cam.pack(fill="both", expand=True)
 
         # Right Cam
@@ -177,7 +182,10 @@ class MissionControlGUI:
             padx=6,
         )
         self.lbl_right_hdr.pack(fill="x")
-        self.canvas_right_cam = tk.Label(panel_right_cam, bg="#111827", text="Waiting for Right Camera...")
+        self.canvas_right_cam = tk.Label(
+            panel_right_cam, bg="#111827", text="Waiting for Right Camera...",
+            bd=0, highlightthickness=0, padx=0, pady=0
+        )
         self.canvas_right_cam.pack(fill="both", expand=True)
 
         # ---------------------------------------------------------------------
@@ -202,6 +210,7 @@ class MissionControlGUI:
             text="Shows the last screenshot or\nlast received depth map / size bounding box",
             fg="#9ca3af",
             font=self.font_subtitle,
+            bd=0, highlightthickness=0, padx=0, pady=0
         )
         self.canvas_proc.pack(fill="both", expand=True)
 
@@ -217,16 +226,20 @@ class MissionControlGUI:
         )
         self.lbl_robot_conn.pack(side="left")
 
-        self.canvas_map = tk.Label(panel_map, bg="#111827", text="Shows the robot's location on the map", fg="#9ca3af")
+        self.canvas_map = tk.Label(
+            panel_map, bg="#111827", text="Shows the robot's location on the map", fg="#9ca3af",
+            bd=0, highlightthickness=0, padx=0, pady=0
+        )
         self.canvas_map.pack(fill="both", expand=True)
 
         # ---------------------------------------------------------------------
         # 4. Bottom Results Banner
         # ---------------------------------------------------------------------
-        panel_result = tk.Frame(left_container, bg="#9ca3af", relief="solid", bd=2)
-        panel_result.grid(row=3, column=0, columnspan=2, sticky="ew", padx=3, pady=3)
+        self.panel_result = tk.Frame(left_container, bg="#9ca3af", relief="solid", bd=2)
+        self.panel_result.grid(row=3, column=0, columnspan=2, sticky="ew", padx=3, pady=3)
+        self.panel_result.bind("<Configure>", self._on_result_panel_configure)
         self.lbl_result = tk.Label(
-            panel_result,
+            self.panel_result,
             text="Result:\n(Awaiting Level execution)",
             font=self.font_subtitle,
             bg="#9ca3af",
@@ -235,10 +248,11 @@ class MissionControlGUI:
             justify="left",
             padx=12,
             pady=8,
+            wraplength=700,
         )
         self.lbl_result.pack(fill="x")
         self.btn_level_results = tk.Button(
-            panel_result, text="Show level results", command=self._show_level_results,
+            self.panel_result, text="Show level results", command=self._show_level_results,
             font=self.font_body, relief="flat",
         )
         self.btn_level_results.pack(anchor="e", padx=8, pady=(0, 4))
@@ -347,6 +361,11 @@ class MissionControlGUI:
     # Updates & Event Handlers
     # -------------------------------------------------------------------------
 
+    def _on_result_panel_configure(self, event: tk.Event) -> None:
+        usable = max(200, event.width - 32)
+        if self.lbl_result.cget("wraplength") != usable:
+            self.lbl_result.config(wraplength=usable)
+
     def _show_level_results(self) -> None:
         if not self.manual_capture.busy:
             self.manual_capture.result_text = ""
@@ -434,31 +453,46 @@ class MissionControlGUI:
         cur_lvl = self.m.current_level or 1
         res_text = self.m.level_results.get(cur_lvl, "")
         if self.manual_capture.result_text:
-            self.lbl_result.config(text="Result — image-based estimate:\n" + self.manual_capture.result_text)
+            raw_result = "Result — image-based estimate:\n" + self.manual_capture.result_text
         elif res_text:
-            self.lbl_result.config(text=f"Result, Level {cur_lvl}:\n{res_text}")
+            raw_result = f"Result, Level {cur_lvl}:\n{res_text}"
         else:
-            self.lbl_result.config(text=f"Result, Level {cur_lvl}:\n(Awaiting task completion)")
+            raw_result = f"Result, Level {cur_lvl}:\n(Awaiting task completion)"
+
+        config_kwargs = {"text": raw_result}
+        if hasattr(self, "font_result_compact") and hasattr(self, "font_subtitle"):
+            config_kwargs["font"] = self.font_result_compact if len(raw_result) > 80 else self.font_subtitle
+        if hasattr(self, "panel_result"):
+            config_kwargs["wraplength"] = max(200, self.panel_result.winfo_width() - 32)
+        self.lbl_result.config(**config_kwargs)
 
         # 4. Update Cameras Live Feed
         left_f, right_f, fps = self.m.camera.get_latest_pair()
         self.lbl_left_hdr.config(text=f"Left camera : {fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}")
         self.lbl_right_hdr.config(text=f"Right camera : {fps:.1f} fps, {self.m.camera.width}x{self.m.camera.height}")
 
-        self._render_frame_to_label(left_f, self.canvas_left_cam, "_img_left", (440, 260))
-        self._render_frame_to_label(right_f, self.canvas_right_cam, "_img_right", (440, 260))
+        self._render_frame_to_label(left_f, self.canvas_left_cam, "_img_left")
+        self._render_frame_to_label(right_f, self.canvas_right_cam, "_img_right")
 
         # 5. Update Last Processed Frame
         if self.m.last_processed_frame is not None:
             self.lbl_proc_hdr.config(text=f"Last Processed Frame: {self.m.last_processed_name}")
-            self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed", (440, 260))
+            self._render_frame_to_label(self.m.last_processed_frame, self.canvas_proc, "_img_processed")
 
         # 6. Update Map View
+        try:
+            map_w = int(self.canvas_map.winfo_width())
+            map_h = int(self.canvas_map.winfo_height())
+            if map_w <= 1 or map_h <= 1:
+                map_w, map_h = 500, 300
+        except (TypeError, ValueError):
+            map_w, map_h = 500, 300
+
         map_img = self.map_renderer.render(
             keypoints=self.m.keypoints.get_all(),
             robot_status=self.m.robot.latest_status,
             target_keypoint_id=self.m.target_keypoint_id,
-            target_size=(440, 260),
+            target_size=(map_w, map_h),
         )
         self._img_map = ImageTk.PhotoImage(map_img)
         self.canvas_map.config(image=self._img_map, text="")
@@ -474,26 +508,43 @@ class MissionControlGUI:
             self.txt_console.see(tk.END)
             self.txt_console.config(state="disabled")
 
-        self.root.after(50, self._update_loop)
+        self._after_id = self.root.after(50, self._update_loop)
 
     def _render_frame_to_label(
         self,
         frame: Optional[np.ndarray],
         label: tk.Label,
         attr_name: str,
-        target_size: tuple[int, int],
+        target_size: Optional[tuple[int, int]] = None,
     ) -> None:
         if frame is None:
             return
         try:
+            if target_size is None:
+                try:
+                    w = int(label.winfo_width())
+                    h = int(label.winfo_height())
+                    if w <= 1 or h <= 1:
+                        w, h = 500, 300
+                except (TypeError, ValueError):
+                    w, h = 500, 300
+                size = (w, h)
+            else:
+                try:
+                    size = (max(64, int(target_size[0])), max(64, int(target_size[1])))
+                except (TypeError, ValueError):
+                    size = (500, 300)
+
             # Convert BGR to RGB
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(rgb)
-            img.thumbnail(target_size, Image.Resampling.BILINEAR)
+            # Aspect Fit (Option A): scale to fit available space while preserving camera FOV
+            img.thumbnail(size, Image.Resampling.BILINEAR)
 
-            canvas = Image.new("RGB", target_size, (15, 17, 23))
-            offset_x = (target_size[0] - img.width) // 2
-            offset_y = (target_size[1] - img.height) // 2
+            # Seamless background matching label bg #111827 (RGB 17, 24, 39)
+            canvas = Image.new("RGB", size, (17, 24, 39))
+            offset_x = (size[0] - img.width) // 2
+            offset_y = (size[1] - img.height) // 2
             canvas.paste(img, (offset_x, offset_y))
 
             tk_img = ImageTk.PhotoImage(canvas)
@@ -503,6 +554,12 @@ class MissionControlGUI:
             pass
 
     def _on_close(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.root.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
         self.manual_capture.close()
         self.m.stop()
         self.m.camera.stop()

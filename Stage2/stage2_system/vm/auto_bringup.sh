@@ -2,26 +2,20 @@
 # ==============================================================================
 # TurtleBot 4 Stage 2 System: Strict Step-by-Step VM Navigation Bringup
 # ==============================================================================
-# Adapted copy of Stage2/vm_map_tools/auto_nav_bringup.sh for the Stage 2 main
-# program. Starts the ROS 2 navigation side with a single command:
+# Starts the long-lived ROS 2 navigation stack + RViz2 with a single command:
 #
 #   1. Environment + cleanup of leftover navigation nodes
 #   2. Robot connectivity check (/odom, /scan)
 #   3. Localization (map_server + AMCL)
 #   4. Nav2 (with vm_map_tools/maps/nav2_params.yaml)
-#   5. RViz2 (required to set the initial pose)
-#   6. Manual initial pose: set "2D Pose Estimate" in RViz, then confirm here
+#   5. RViz2 (Software-Rendering mode)
 #
-# NOTE: Step 7 (robot_controller.py) is intentionally NOT launched here so you
-# can run and restart the Python script quickly in a separate terminal without
-# restarting Localization, Nav2, or RViz2:
+# NOTE: Setting/confirming the initial pose in RViz and running the Python
+# robot controller are handled together in a separate terminal:
 #     cd ~/Robot-Needs-Vision/Stage2/stage2_system/vm
 #     ./start_robot_controller.sh
-#
-# - Every step must succeed before the next one starts.
-# - Live 1-second status feedback, 300s timeout per step.
-# - If any step fails or any core nav process dies, everything is cleaned up.
-# - Map / params / keypoints are read in place from Stage2/vm_map_tools/maps.
+# That way you can carry the robot back to the start, reset the initial pose,
+# and restart only the Python script without restarting Nav2 or RViz2.
 # ==============================================================================
 
 set -o pipefail
@@ -142,7 +136,7 @@ while [ $# -gt 0 ]; do
             CHECK_ONLY=true
             ;;
         --controller-only)
-            echo -e "${YELLOW}[INFO] robot_controller.py is now run separately so you can restart it freely.${NC}"
+            echo -e "${YELLOW}[INFO] Initial pose confirmation + robot_controller.py now run together separately.${NC}"
             echo -e "Run in your terminal:"
             echo -e "  ${BOLD}cd ${SCRIPT_DIR} && ./start_robot_controller.sh${NC}"
             exit 0
@@ -158,8 +152,8 @@ while [ $# -gt 0 ]; do
             echo "  --port N            Port shown in next-step instructions (default: 8070)"
             echo "  --help, -h          Show this help message"
             echo ""
-            echo "Note: After bringup finishes Step 6, start robot_controller.py in a"
-            echo "      separate terminal with ./start_robot_controller.sh"
+            echo "Note: After RViz2 opens (Step 5), run ./start_robot_controller.sh in a"
+            echo "      separate terminal to confirm the initial pose and start the controller."
             echo ""
             echo "Logs: ${LOG_DIR}/"
             exit 0
@@ -179,7 +173,7 @@ echo -e "${BLUE}${BOLD}=========================================================
 # ------------------------------------------------------------------------------
 # STEP 1: Source Environment & Clean Leftover Processes
 # ------------------------------------------------------------------------------
-echo -e "\n${BOLD}[1/6] Setting up ROS 2 Humble Environment & Cleaning Leftover Nodes...${NC}"
+echo -e "\n${BOLD}[1/5] Setting up ROS 2 Humble Environment & Cleaning Leftover Nodes...${NC}"
 
 if [ "$CHECK_ONLY" = false ]; then
     echo -e "  • Stopping any leftover Nav2 / AMCL / RViz processes from previous runs..."
@@ -288,7 +282,7 @@ wait_for_robot_topic() {
     done
 }
 
-echo -e "\n${BOLD}[2/6] Verifying Robot Hardware Connectivity (Timeout: ${STEP_TIMEOUT}s)...${NC}"
+echo -e "\n${BOLD}[2/5] Verifying Robot Hardware Connectivity (Timeout: ${STEP_TIMEOUT}s)...${NC}"
 
 if ! wait_for_robot_topic "/odom" "${STEP_TIMEOUT}" "Create 3 Odometry"; then
     echo -e "${YELLOW}Hint: Ensure the Create 3 base is awake, VMware is Bridged to Wi-Fi (192.168.31.x), and ROS_DOMAIN_ID=0.${NC}"
@@ -310,7 +304,7 @@ fi
 # ------------------------------------------------------------------------------
 # STEP 3: Launch Localization & Wait for Map + AMCL TF Lock
 # ------------------------------------------------------------------------------
-echo -e "\n${BOLD}[3/6] Starting Localization (map_server & amcl) (Timeout: ${STEP_TIMEOUT}s)...${NC}"
+echo -e "\n${BOLD}[3/5] Starting Localization (map_server & amcl) (Timeout: ${STEP_TIMEOUT}s)...${NC}"
 echo -e "  • Log file: ${CYAN}${LOG_LOC}${NC}"
 : > "${LOG_LOC}"
 
@@ -391,7 +385,7 @@ sleep 2
 # ------------------------------------------------------------------------------
 # STEP 4: Launch Nav2 Stack & Wait for All Costmaps and Servers to Activate
 # ------------------------------------------------------------------------------
-echo -e "\n${BOLD}[4/6] Starting Nav2 Navigation Stack (Timeout: ${STEP_TIMEOUT}s)...${NC}"
+echo -e "\n${BOLD}[4/5] Starting Nav2 Navigation Stack (Timeout: ${STEP_TIMEOUT}s)...${NC}"
 echo -e "  • Log file: ${CYAN}${LOG_NAV}${NC}"
 : > "${LOG_NAV}"
 
@@ -463,9 +457,9 @@ done
 echo -e "  ${GREEN}[✔] Step 4 Complete: Nav2 navigation stack is 100% active.${NC}"
 
 # ------------------------------------------------------------------------------
-# STEP 5: Launch RViz2 (always — required to set the initial pose)
+# STEP 5: Launch RViz2 (Software-Rendering mode)
 # ------------------------------------------------------------------------------
-echo -e "\n${BOLD}[5/6] Launching RViz2 (Software-Rendering mode) (Timeout: ${STEP_TIMEOUT}s)...${NC}"
+echo -e "\n${BOLD}[5/5] Launching RViz2 (Software-Rendering mode) (Timeout: ${STEP_TIMEOUT}s)...${NC}"
 echo -e "  • Log file: ${CYAN}${LOG_RVIZ}${NC}"
 : > "${LOG_RVIZ}"
 
@@ -498,73 +492,18 @@ while true; do
 done
 echo -e "  ${GREEN}[✔] Step 5 Complete: RViz2 is running.${NC}"
 
-# ------------------------------------------------------------------------------
-# STEP 6: Manual Initial Pose (2D Pose Estimate in RViz) + Confirmation
-# ------------------------------------------------------------------------------
-read_amcl_pose() {
-    # Prints "x y yaw_deg" of the latest /amcl_pose (transient_local), or nothing on timeout.
-    timeout 4 ros2 topic echo --once \
-        --qos-durability transient_local --qos-reliability reliable \
-        /amcl_pose 2>/dev/null | python3 -c '
-import math, sys
-try:
-    import yaml
-    d = yaml.safe_load(sys.stdin.read())
-    p = d["pose"]["pose"]["position"]; q = d["pose"]["pose"]["orientation"]
-    yaw = math.degrees(math.atan2(2*(q["w"]*q["z"] + q["x"]*q["y"]), 1 - 2*(q["y"]**2 + q["z"]**2)))
-    print(f"{p[\"x\"]:.2f} {p[\"y\"]:.2f} {yaw:.1f}")
-except Exception:
-    pass
-'
-}
-
-echo -e "\n${BOLD}[6/6] Set the Robot's Initial Pose in RViz${NC}"
-echo -e "  1. In RViz, click ${BOLD}2D Pose Estimate${NC} on the top toolbar."
-echo -e "  2. Click the robot's real position on the map and drag in the direction it faces."
-echo -e "  3. Check that the laser scan (red dots) lines up with the map walls."
-echo -e "  4. Come back to this terminal and press ${BOLD}Enter${NC} to confirm."
-
-while true; do
-    echo ""
-    read -r -p "  ➜ Press Enter once the initial pose is set in RViz (or type 'q' to abort): " ANSWER < /dev/tty
-    if [ "${ANSWER}" = "q" ] || [ "${ANSWER}" = "Q" ]; then
-        fail_and_abort "Bringup aborted by user at initial pose confirmation" ""
-    fi
-
-    check_nav_stack_alive
-
-    POSE=$(read_amcl_pose)
-    if [ -n "${POSE}" ]; then
-        read -r PX PY PYAW <<< "${POSE}"
-        echo -e "  • AMCL pose: ${CYAN}x=${PX} m, y=${PY} m, yaw=${PYAW}°${NC}"
-    else
-        echo -e "  ${YELLOW}• Could not read /amcl_pose (AMCL publishes it after a pose estimate or movement).${NC}"
-    fi
-
-    read -r -p "  ➜ Is the robot correctly localized on the map? [y/N]: " CONFIRM < /dev/tty
-    case "${CONFIRM}" in
-        y|Y|yes|YES|Yes)
-            echo -e "  ${GREEN}[✔] Step 6 Complete: Initial pose confirmed by user.${NC}"
-            break
-            ;;
-        *)
-            echo -e "  ${YELLOW}Okay — set the pose again with 2D Pose Estimate in RViz, then press Enter.${NC}"
-            ;;
-    esac
-done
-
 FIRST_IP=$(echo "${VM_IPS}" | awk '{print $1}')
 echo -e "\n${GREEN}${BOLD}=====================================================================${NC}"
-echo -e "${GREEN}${BOLD}  ALL 6 STEPS SUCCEEDED — ROS 2 Navigation Stack is READY!           ${NC}"
+echo -e "${GREEN}${BOLD}  ALL 5 STEPS SUCCEEDED — Localization, Nav2 & RViz2 are READY!      ${NC}"
 echo -e "${GREEN}${BOLD}=====================================================================${NC}"
 echo -e "  • VM IP Address(es): ${CYAN}${VM_IPS}${NC}"
 echo -e "  • Logs:              ${CYAN}${LOG_DIR}/${NC}"
 echo -e ""
-echo -e "${YELLOW}${BOLD}Next step 1 — Open a SEPARATE VM terminal and run the Python controller:${NC}"
+echo -e "${YELLOW}${BOLD}Next step 1 — Open a SEPARATE VM terminal for Initial Pose + Controller:${NC}"
 echo -e "  ${BOLD}cd ${SCRIPT_DIR}${NC}"
 echo -e "  ${BOLD}./start_robot_controller.sh --port ${CTRL_PORT}${NC}"
-echo -e "  ${CYAN}(You can press Ctrl+C and re-run ./start_robot_controller.sh anytime${NC}"
-echo -e "  ${CYAN} without restarting Localization, Nav2, or RViz!)${NC}"
+echo -e "  ${CYAN}(It will guide you through confirming '2D Pose Estimate' in RViz.${NC}"
+echo -e "  ${CYAN} Restart it anytime or type 'p' + Enter to reset pose between runs!)${NC}"
 echo -e ""
 echo -e "${YELLOW}${BOLD}Next step 2 — On the Windows PC:${NC}"
 echo -e "  ${BOLD}conda activate phienv${NC}"
