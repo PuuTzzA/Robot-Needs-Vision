@@ -213,7 +213,7 @@ class MissionControlGUI:
         self.canvas_proc = tk.Label(
             panel_proc,
             bg="#111827",
-            text="Shows the last screenshot,\nclassification overlay, or GPU size bounding box",
+            text="Shows the last screenshot,\nclassification overlay, or GPU disparity overlay",
             fg="#9ca3af",
             font=self.font_subtitle,
             bd=0, highlightthickness=0, padx=0, pady=0

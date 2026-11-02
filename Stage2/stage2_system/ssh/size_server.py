@@ -207,6 +207,7 @@ class SizeServerCore:
                         interpolation=cv2.INTER_NEAREST,
                     ).astype(bool)
 
+                    box = [int(v) for v in res.boxes.xyxy[idx].detach().cpu().numpy()]
                     dist_m, w_cm, h_cm, valid_pix = robust_measurement(
                         mask=mask_resized,
                         depth=depth_m,
@@ -214,11 +215,11 @@ class SizeServerCore:
                         fy=fy,
                         cx=cx,
                         cy=cy,
+                        bbox=box,
                     )
                     cls_id = int(res.boxes.cls[idx].item())
                     cls_name = str(res.names[cls_id])
                     conf = float(res.boxes.conf[idx].item())
-                    box = [int(v) for v in res.boxes.xyxy[idx].detach().cpu().numpy()]
 
                     detections.append(
                         DetectionItem(
@@ -237,19 +238,19 @@ class SizeServerCore:
         # Select primary detection
         primary = select_primary_detection(detections, hint_class=hint_class, image_shape=left_rect.shape)
 
-        # 6. Colorize depth/disparity map and annotate bounding box + size over it
-        depth_colored = colorize_depth(depth_m, min_depth=0.2, max_depth=4.0)
-        if not np.any(depth_colored):
-            depth_colored = colorize_disparity(disparity)
+        # 6. Colorize disparity map and annotate bounding box + class label over it
+        disp_colored = colorize_disparity(disparity)
+        if not np.any(disp_colored):
+            disp_colored = colorize_depth(depth_m, min_depth=0.2, max_depth=4.0)
 
-        annotated = depth_colored.copy()
+        annotated = disp_colored.copy()
         for d in detections:
             is_prim = (primary is not None and d.bbox_px == primary.bbox_px)
             draw_detection_overlay(annotated, d, is_primary=is_prim)
 
         # Encode to JPEG
         ok_a, buf_a = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        ok_d, buf_d = cv2.imencode(".jpg", depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok_d, buf_d = cv2.imencode(".jpg", disp_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
         b64_ann = base64.b64encode(buf_a.tobytes()).decode("ascii") if ok_a else None
         b64_depth = base64.b64encode(buf_d.tobytes()).decode("ascii") if ok_d else None
@@ -282,13 +283,13 @@ class SizeServerCore:
             distance_m=0.88,
             valid_depth_pixels=15000,
         )
-        synth_depth = np.linspace(3.5, 1.4, 720, dtype=np.float32)[:, None] * np.ones((1, 1280), dtype=np.float32)
-        synth_depth[200:650, 400:600] = 0.88
-        depth_colored = colorize_depth(synth_depth, min_depth=0.2, max_depth=4.0)
-        annotated = depth_colored.copy()
+        synth_disp = np.linspace(35.0, 140.0, 720, dtype=np.float32)[:, None] * np.ones((1, 1280), dtype=np.float32)
+        synth_disp[200:650, 400:600] = 180.0
+        disp_colored = colorize_disparity(synth_disp)
+        annotated = disp_colored.copy()
         draw_detection_overlay(annotated, det, is_primary=True)
         ok_a, buf_a = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        ok_d, buf_d = cv2.imencode(".jpg", depth_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok_d, buf_d = cv2.imencode(".jpg", disp_colored, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return MeasurementResult(
             ok=True,
             point=point_name,

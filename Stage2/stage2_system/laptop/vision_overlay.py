@@ -105,7 +105,7 @@ def draw_text_result_overlay(
 
 
 def _draw_local_detection_box(img: np.ndarray, det: DetectionItem, is_primary: bool) -> None:
-    """Draw high-contrast bounding box and estimated size label directly above the box."""
+    """Draw high-contrast bounding box and class label directly above the box."""
     if len(det.bbox_px) != 4:
         return
     h, w = img.shape[:2]
@@ -123,16 +123,8 @@ def _draw_local_detection_box(img: np.ndarray, det: DetectionItem, is_primary: b
     cv2.rectangle(img, (x1, y1), (x2, y2), (12, 16, 22), thickness + 2)
     cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
 
-    size_parts = []
-    if det.height_cm is not None:
-        size_parts.append(f"H: {det.height_cm:.1f}cm")
-    if det.width_cm is not None:
-        size_parts.append(f"W: {det.width_cm:.1f}cm")
-    if det.distance_m is not None:
-        size_parts.append(f"Z: {det.distance_m:.2f}m")
-
-    size_str = " ".join(size_parts)
-    tag = f"{det.class_name} | {size_str}" if size_str else f"{det.class_name} ({det.confidence:.2f})"
+    # Class label directly above the bounding box
+    tag = det.class_name.strip().capitalize() if det.class_name else "Object"
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     f_scale = max(0.5, min(1.05, h / 700.0))
@@ -173,7 +165,7 @@ def draw_measurement_overlay(
     meas: MeasurementResult,
     point_name: Optional[str] = None,
 ) -> np.ndarray:
-    """Build annotated disparity/depth map preview frame with bounding box and estimated size above it."""
+    """Build annotated disparity map preview frame with bounding box and class label composited over it."""
     depth_img = _decode_b64_jpeg(meas.depth_jpeg_b64)
     ann_img = _decode_b64_jpeg(meas.annotated_jpeg_b64) if depth_img is None else None
 
@@ -200,13 +192,18 @@ def draw_measurement_overlay(
             is_prim = meas.primary is not None and d.bbox_px == meas.primary.bbox_px
             _draw_local_detection_box(base_img, d, is_primary=is_prim)
 
-    prefix = f"Point {point_name}" if point_name else "Stereo GPU"
+    if point_name:
+        header = f"Point {point_name}: Estimated Depth and Class"
+    else:
+        header = "Stereo GPU: Estimated Depth and Class"
+
     if meas.ok and meas.primary is not None:
         p = meas.primary
-        h_str = f"H: {p.height_cm:.1f} cm" if p.height_cm is not None else "H: n/a"
-        w_str = f" | W: {p.width_cm:.1f} cm" if p.width_cm is not None else ""
-        z_str = f" | Z: {p.distance_m:.2f} m" if p.distance_m is not None else ""
-        summary = f"{p.class_name} ({h_str}{w_str}{z_str})"
+        cls_title = p.class_name.strip().capitalize() if p.class_name else "Object"
+        if p.distance_m is not None:
+            summary = f"{cls_title} ({p.distance_m:.1f}m)"
+        else:
+            summary = cls_title
         accent = (80, 235, 130)
     elif meas.ok:
         summary = "No object detected"
@@ -220,7 +217,7 @@ def draw_measurement_overlay(
 
     return _draw_banner_card(
         base_img,
-        header=f"{prefix} - Estimated Depth & Size",
+        header=header,
         main_line=summary,
         accent_bgr=accent,
         position="bottom",

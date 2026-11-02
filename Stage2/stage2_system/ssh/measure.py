@@ -10,6 +10,59 @@ import numpy as np
 from protocol import DetectionItem
 
 
+def average_center_distance(
+    depth: np.ndarray,
+    bbox: list[int] | tuple[int, int, int, int],
+    mask: Optional[np.ndarray] = None,
+    center_fraction: float = 0.3,
+    min_radius: int = 4,
+) -> Optional[float]:
+    """Calculate distance from camera by averaging over the center pixels of the detected object.
+
+    Args:
+        depth: 2D array of metric depth in metres.
+        bbox: Bounding box [x1, y1, x2, y2].
+        mask: Optional boolean segmentation mask of the detected object.
+        center_fraction: Proportion of width/height around object center to sample.
+        min_radius: Minimum pixel radius around center to sample.
+
+    Returns:
+        Average distance in metres, or None if no valid center depth pixels exist.
+    """
+    if depth is None or depth.size == 0 or len(bbox) < 4:
+        return None
+
+    h, w = depth.shape[:2]
+    x1, y1, x2, y2 = [int(round(v)) for v in bbox[:4]]
+    x1, x2 = max(0, min(w - 1, x1)), max(0, min(w, x2))
+    y1, y2 = max(0, min(h - 1, y1)), max(0, min(h, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    cx = (x1 + x2) // 2
+    cy = (y1 + y2) // 2
+    rx = max(min_radius, int((x2 - x1) * center_fraction * 0.5))
+    ry = max(min_radius, int((y2 - y1) * center_fraction * 0.5))
+
+    y_min, y_max = max(0, cy - ry), min(h, cy + ry + 1)
+    x_min, x_max = max(0, cx - rx), min(w, cx + rx + 1)
+
+    roi_depth = depth[y_min:y_max, x_min:x_max]
+    valid = np.isfinite(roi_depth) & (roi_depth > 0.1) & (roi_depth < 8.0)
+
+    if mask is not None:
+        roi_mask = mask[y_min:y_max, x_min:x_max]
+        masked_valid = valid & roi_mask
+        if np.any(masked_valid):
+            valid = masked_valid
+
+    pixels = roi_depth[valid]
+    if pixels.size == 0:
+        return None
+
+    return float(np.mean(pixels))
+
+
 def robust_measurement(
     mask: np.ndarray,
     depth: np.ndarray,
@@ -17,8 +70,9 @@ def robust_measurement(
     fy: float,
     cx: float,
     cy: float,
+    bbox: Optional[list[int] | tuple[int, int, int, int]] = None,
 ) -> Tuple[Optional[float], Optional[float], Optional[float], int]:
-    """Calculate median distance, robust metric width, and height in cm for an instance mask.
+    """Calculate average center distance, robust metric width, and height in cm for an instance mask.
 
     Returns:
         (distance_m, width_cm, height_cm, valid_pixel_count)
@@ -59,7 +113,17 @@ def robust_measurement(
     # Convert to centimeters
     width_cm = round(width_m * 100.0, 1)
     height_cm = round(height_m * 100.0, 1)
-    distance_m = round(median_z, 3)
+
+    # Average distance over center pixels of the detected object
+    target_box = bbox
+    if target_box is None and cols.size > 0 and rows.size > 0:
+        target_box = [int(cols.min()), int(rows.min()), int(cols.max()), int(rows.max())]
+
+    center_dist = average_center_distance(depth, target_box, mask=valid) if target_box else None
+    if center_dist is not None:
+        distance_m = round(center_dist, 3)
+    else:
+        distance_m = round(median_z, 3)
 
     return distance_m, width_cm, height_cm, int(z.size)
 
@@ -128,17 +192,8 @@ def draw_detection_overlay(
     cv2.rectangle(image, (x1, y1), (x2, y2), (12, 16, 22), thickness + 2)
     cv2.rectangle(image, (x1, y1), (x2, y2), color, thickness)
 
-    # Size text above the bounding box
-    size_parts = []
-    if detection.height_cm is not None:
-        size_parts.append(f"H: {detection.height_cm:.1f}cm")
-    if detection.width_cm is not None:
-        size_parts.append(f"W: {detection.width_cm:.1f}cm")
-    if detection.distance_m is not None:
-        size_parts.append(f"Z: {detection.distance_m:.2f}m")
-
-    size_str = " ".join(size_parts)
-    text = f"{detection.class_name} | {size_str}" if size_str else f"{detection.class_name}"
+    # Class label text above the bounding box
+    text = detection.class_name.strip().capitalize() if detection.class_name else "Object"
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.68

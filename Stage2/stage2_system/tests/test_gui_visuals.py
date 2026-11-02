@@ -129,12 +129,13 @@ class TestGuiVisuals(unittest.TestCase):
         self.assertEqual(self.gui.lbl_status.cget("text"), "Status: Failed to get to A, continuing with B")
         self.assertEqual(self.gui.lbl_status.cget("fg"), "#991b1b")
 
-    def test_measurement_overlay_uses_disparity_depth_map_with_size_above_bbox(self):
-        """Verifies Level 3 measurement overlay draws bbox + size over disparity/depth map instead of RGB."""
+    def test_measurement_overlay_uses_disparity_map_with_class_above_bbox(self):
+        """Verifies Level 3 measurement overlay draws bbox + class over disparity map instead of RGB."""
         from laptop.vision_overlay import draw_measurement_overlay
+        from shared.protocol import DetectionItem, MeasurementResult
         import cv2
 
-        # Create a pure black RGB frame; mock SizeLink produces a vivid non-black Turbo depth map
+        # Create a pure black RGB frame; mock SizeLink produces a vivid non-black depth/disparity map
         black_rgb = np.zeros((480, 640, 3), dtype=np.uint8)
         ok_png, png_buf = cv2.imencode(".png", np.hstack((black_rgb, black_rgb)))
         self.assertTrue(ok_png)
@@ -145,8 +146,33 @@ class TestGuiVisuals(unittest.TestCase):
 
         rendered = draw_measurement_overlay(black_rgb, meas, point_name="B")
         self.assertEqual(rendered.shape, black_rgb.shape)
-        # Upper-left background outside bbox/banner would be (0,0,0) if RGB were used, but non-zero on depth map
+        # Upper-left background outside bbox/banner would be (0,0,0) if RGB were used, but non-zero on depth/disparity map
         self.assertGreater(float(rendered[20:80, 20:120].mean()), 15.0)
+
+    def test_measurement_overlay_banner_formatting(self):
+        """Verifies banner header says 'Point C: Estimated Depth and Class' and shows 'Bottle (2.5m)'."""
+        from laptop.vision_overlay import draw_measurement_overlay
+        from shared.protocol import DetectionItem, MeasurementResult
+        from unittest.mock import patch
+
+        det = DetectionItem(
+            class_name="bottle",
+            confidence=0.95,
+            bbox_px=[100, 100, 300, 400],
+            height_cm=28.5,
+            width_cm=8.5,
+            distance_m=2.5,
+        )
+        meas = MeasurementResult(ok=True, point="C", primary=det, detections=[det])
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        with patch("laptop.vision_overlay._draw_banner_card") as mock_banner:
+            mock_banner.return_value = frame
+            draw_measurement_overlay(frame, meas, point_name="C")
+            mock_banner.assert_called_once()
+            _, kwargs = mock_banner.call_args
+            self.assertEqual(kwargs["header"], "Point C: Estimated Depth and Class")
+            self.assertEqual(kwargs["main_line"], "Bottle (2.5m)")
 
 
 if __name__ == "__main__":
