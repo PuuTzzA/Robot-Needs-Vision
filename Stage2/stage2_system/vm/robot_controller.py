@@ -929,7 +929,29 @@ class RobotController:
             return
 
         if self.stuck_timeout_s > 0.0 and (now_mono - last_move_mono) >= self.stuck_timeout_s:
-            self._fail_active_goal(seq, f"Stuck (not moving for {self.stuck_timeout_s:.0f}s)")
+            tf_alive = True
+            if not self.sim_mode and self.tf_buffer is not None:
+                tf_alive = False
+                for frame in ("base_link", "base_footprint"):
+                    try:
+                        self.tf_buffer.lookup_transform(
+                            "map",
+                            frame,
+                            rclpy.time.Time(),
+                            timeout=rclpy.duration.Duration(seconds=0.05),
+                        )
+                        tf_alive = True
+                        break
+                    except Exception:
+                        pass
+
+            if not self.sim_mode and not tf_alive:
+                fail_msg = f"Stuck (Base disconnected / TF lost for {self.stuck_timeout_s:.0f}s)"
+                print(f"[RobotController] [CRITICAL] Goal #{seq} aborted: TF transform (map -> base_link) stopped updating! Create 3 base may be frozen, low-battery, or offline.")
+            else:
+                fail_msg = f"Stuck (not moving for {self.stuck_timeout_s:.0f}s)"
+
+            self._fail_active_goal(seq, fail_msg)
 
     def tick_step(self) -> None:
         """Periodic logic tick (teleop watchdog, kinematic simulation, nav timeouts) at ~25 Hz."""

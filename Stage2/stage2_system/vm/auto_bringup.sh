@@ -78,6 +78,11 @@ kill_existing_nav_nodes() {
     for pat in "${patterns[@]}"; do
         pkill -9 -f "${pat}" 2>/dev/null || true
     done
+
+    # Clean stale FastDDS shared memory segments and semaphores
+    rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_* 2>/dev/null || true
+    ros2 daemon stop >/dev/null 2>&1 || true
+    ros2 daemon start >/dev/null 2>&1 || true
 }
 
 CLEANED_UP=false
@@ -261,6 +266,24 @@ wait_for_robot_topic() {
         # 1. Check if topic is even listed in the ROS graph yet
         if ! ros2 topic list 2>/dev/null | grep -q "^${topic}$"; then
             printf "\r  ⏳ [%3ds/%ds] Waiting for ${label} (${topic}) to appear in ROS 2 topic list...          " "${elapsed}" "${timeout_secs}"
+
+            # Smart diagnostic probe: alert early if Create 3 base is completely offline
+            if [ "${topic}" = "/odom" ] && [ "${elapsed}" -eq 5 ]; then
+                local wheel_pubs
+                wheel_pubs=$(ros2 topic info /wheel_status 2>/dev/null | awk '/Publisher count:/ {print $3}')
+                if [ -z "${wheel_pubs}" ] || [ "${wheel_pubs}" -eq 0 ] 2>/dev/null; then
+                    echo -e "\n  ${RED}${BOLD}⚠️  [Create 3 Base Disconnected / Stale Alert]${NC}"
+                    echo -e "      • Raspberry Pi is online (/scan and camera work), but the Create 3 base is ${RED}NOT publishing${NC}."
+                    echo -e "      • /wheel_status and /battery_state have ${RED}0 active publishers${NC}."
+                    echo -e "      • ${YELLOW}Probable Cause:${NC} Low-battery cutoff (<14V), motor disable, or base firmware crash."
+                    echo -e "      • ${GREEN}${BOLD}How to Recover the Base:${NC}"
+                    echo -e "        1. Lift the robot off the charging dock onto the floor."
+                    echo -e "        2. Press & hold the ${BOLD}center Power button${NC} on the Create 3 base for ${BOLD}10-15s${NC} until lights go dark."
+                    echo -e "        3. Push the robot ${BOLD}onto the charging dock contacts${NC} (it will chime on boot)."
+                    echo -e "      • Continuing to wait for /odom (rebooting the base now will be detected automatically)..."
+                fi
+            fi
+
             sleep 1
             continue
         fi
@@ -285,7 +308,9 @@ wait_for_robot_topic() {
 echo -e "\n${BOLD}[2/5] Verifying Robot Hardware Connectivity (Timeout: ${STEP_TIMEOUT}s)...${NC}"
 
 if ! wait_for_robot_topic "/odom" "${STEP_TIMEOUT}" "Create 3 Odometry"; then
-    echo -e "${YELLOW}Hint: Ensure the Create 3 base is awake, VMware is Bridged to Wi-Fi (192.168.31.x), and ROS_DOMAIN_ID=0.${NC}"
+    echo -e "${YELLOW}Hint: The Create 3 base did not publish /odom. Perform a hard power-cycle:${NC}"
+    echo -e "${YELLOW}      1. Pull robot off dock -> hold center Power button for 10-15s until dark.${NC}"
+    echo -e "${YELLOW}      2. Push robot back onto charging dock -> wait for chime -> run auto_bringup.sh again.${NC}"
     fail_and_abort "Robot Odometry (/odom) not available within ${STEP_TIMEOUT}s" ""
 fi
 
