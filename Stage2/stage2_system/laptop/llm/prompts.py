@@ -63,17 +63,23 @@ The robot has visited the following locations:
 
 ### REFERENCE INFORMATION:
 - Reference height: The pedestal/box the objects sit upon is 7.0 cm high.
-- Known possible objects (roughly from smallest to tallest):
-  1. Apple (~7-9 cm)
-  2. Cake
-  3. Mug / Cup (~9-12 cm)
-  4. Alarm clock (~10-15 cm)
-  5. Banana (~15-20 cm)
-  6. Book
-  7. Bottle 500ml (~20-23 cm)
-  8. Teddy Bear (sitting vs. standing height varies; typically taller than a 500ml bottle)
-  9. Vase (~25-35 cm)
-  10. Bottle 1.5L (~30-35 cm)
+- These reference heights are more accurate and trustworthy thatn the GPU server estimates. In rare cases there may be objects that are not listed. 
+- Known possible objects (roughly from smallest to tallest, sometimes there are multiple candidates per category):
+  1. Book laying down (~1.5 cm)
+  2. Single Banana laying down (~3.5 cm)
+  3. Bowl (~7 cm)
+  4. Apple (~8 cm)
+  5. Cake (~10 cm)
+  6. Cup (~11 cm)
+  7. Alarm clock (~13 cm)
+  8. Bundle of Bananas laying down (~15 cm)
+  9. Smaller Vase (~17.5 cm)
+  10. Book standing up (~22 cm)
+  11. Bottle 500ml (~23 cm)
+  12. Teddy Bear (sitting vs. standing height varies; typically taller than a 500ml bottle but smaller than the big vase, ~23 cm)
+  13. Bigger Vase (~23 cm)
+  14. Clock (big) (~29cm)
+  15. Bottle 1.5L (~30-35 cm)
 
 ### PRELIMINARY GPU SERVER STEREO & YOLO ESTIMATES (Note: The preliminary estimates are very inacurate and YOLO often detects the incorrect object, e.g. a TV (which is not a possible object) in the background. Trust your own reasoning over the estimates from YOLO (the GPU Server)):
 {preliminary_estimates}
