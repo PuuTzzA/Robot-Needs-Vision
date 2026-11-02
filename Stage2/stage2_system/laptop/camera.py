@@ -105,7 +105,22 @@ def open_camera(
 
         time.sleep(retry_delay)
 
-    raise RuntimeError(f"Could not open camera device {idx} after {retries} attempts.")
+    diag = ""
+    if platform.system() == "Windows":
+        try:
+            from .device_enum import get_device_by_index
+            dev = get_device_by_index(idx)
+            if dev and dev.is_virtual:
+                diag = f" Device {idx} is '{dev.name}', which is a virtual camera filter. Ensure the virtual camera output is started in OBS, or switch to a physical USB camera."
+            elif dev:
+                diag = f" Device {idx} is '{dev.name}'. If OBS Studio or another application is open, ensure it is not capturing this camera with a Video Capture Device (webcams can only be opened by one app at a time)."
+        except Exception:
+            pass
+
+    err_msg = f"Could not open camera device {idx} after {retries} attempts."
+    if diag:
+        err_msg += f"\n[Camera Diagnostic]{diag}"
+    raise RuntimeError(err_msg)
 
 
 @dataclass

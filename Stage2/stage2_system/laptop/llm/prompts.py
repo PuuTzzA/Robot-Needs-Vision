@@ -9,7 +9,7 @@ KNOWN_OBJECT_CATEGORIES = [
     "Apple",
     "Banana",
     "Vase",
-    "Cup",
+    "Mug/Cup",
     "Cake",
     "Bottle",
     "Book",
@@ -70,7 +70,7 @@ The robot has visited the following locations:
   3. Bowl (~7 cm)
   4. Apple (~8 cm)
   5. Cake (~10 cm)
-  6. Cup (~11 cm)
+  6. Mug/Cup (~11 cm)
   7. Alarm clock (~13 cm)
   8. Bundle of Bananas laying down (~15 cm)
   9. Smaller Vase (~17.5 cm)
@@ -90,7 +90,7 @@ The robot has visited the following locations:
    If a preliminary GPU estimate appears noisy, misclassified, or missing, refine it using visual evidence from the photo.
 3. Build an inventory listing each inspected point with its final object class, color, and height.
 4. Provide the answer in `answer` as a complete, informative sentence — NEVER reply with only a bare number, single word, or bare point letter.
-   Always state the direct answer AND explicitly name the relevant objects and their point locations in a full sentence.
+   Always state the direct answer AND explicitly name the relevant objects, their color or height and their point locations in a full sentence.
    - Example (counting/comparison): If the prompt is "How many objects are taller than the object at point D?", do NOT just answer "3"; instead answer:
      "3. The Vase at point B, the Clock at point C and the Book at point I are taller than the Cake at point D."
    - Example (color count): "2. The Bottle at point B and the Cup at point H have the same blue color as the Bowl at point D."

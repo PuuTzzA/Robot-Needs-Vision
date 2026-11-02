@@ -105,6 +105,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip interactive startup camera preview/selection and use saved/CLI camera IDs directly.",
     )
+    parser.add_argument(
+        "--allow-virtual-cams",
+        action="store_true",
+        help="Include virtual cameras (e.g. OBS Virtual Camera) in candidate stereo selection.",
+    )
     parser.add_argument("--width", type=int, default=1280, help="Capture width (default: 1280).")
     parser.add_argument("--height", type=int, default=720, help="Capture height (default: 720).")
     parser.add_argument("--fps", type=float, default=15.0, help="Target capture FPS (default: 15.0 for USB stability).")
@@ -140,6 +145,7 @@ def main() -> None:
                 config_path=cam_config_path,
                 cli_left=args.left_cam,
                 cli_right=args.right_cam,
+                ignore_virtual=not args.allow_virtual_cams,
             )
         except KeyboardInterrupt:
             print("\n[Setup] Startup cancelled during camera selection.")

@@ -23,6 +23,12 @@ import cv2
 import numpy as np
 
 from .camera import get_backend
+from .device_enum import (
+    VideoDevice,
+    enumerate_capture_devices,
+    find_matching_device_index,
+    get_device_by_index,
+)
 
 DEFAULT_LEFT_CAM = 0
 DEFAULT_RIGHT_CAM = 2
@@ -67,33 +73,113 @@ def load_camera_config(
     config_path: Path,
     default_left: int = DEFAULT_LEFT_CAM,
     default_right: int = DEFAULT_RIGHT_CAM,
+    auto_remap: bool = True,
+    devices: Optional[list[VideoDevice]] = None,
 ) -> tuple[int, int]:
-    """Load saved (left_cam, right_cam) from JSON config, or return defaults."""
+    """Load saved (left_cam, right_cam) from JSON config, or return defaults.
+
+    When auto_remap is True and hardware paths/names are saved, attempts to match
+    against current devices to survive device index shifts when OBS Studio or
+    virtual cameras are launched or closed.
+    """
+    left = default_left
+    right = default_right
+    left_path = ""
+    right_path = ""
+    left_name = ""
+    right_name = ""
+
     try:
         if config_path.exists():
             data = json.loads(config_path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                left = data.get("left_cam")
-                right = data.get("right_cam")
+                raw_left = data.get("left_cam")
+                raw_right = data.get("right_cam")
                 if (
-                    isinstance(left, int)
-                    and not isinstance(left, bool)
-                    and isinstance(right, int)
-                    and not isinstance(right, bool)
-                    and left >= 0
-                    and right >= 0
+                    isinstance(raw_left, int)
+                    and not isinstance(raw_left, bool)
+                    and isinstance(raw_right, int)
+                    and not isinstance(raw_right, bool)
+                    and raw_left >= 0
+                    and raw_right >= 0
                 ):
-                    return left, right
+                    left = raw_left
+                    right = raw_right
+                    left_path = str(data.get("left_path", ""))
+                    right_path = str(data.get("right_path", ""))
+                    left_name = str(data.get("left_name", ""))
+                    right_name = str(data.get("right_name", ""))
     except Exception as err:
         print(f"[CameraSelect] [WARN] Could not read {config_path.name}: {err}")
-    return default_left, default_right
+        return default_left, default_right
+
+    if not auto_remap or (not left_path and not left_name and not right_path and not right_name):
+        return left, right
+
+    try:
+        if devices is None:
+            devices = enumerate_capture_devices()
+
+        if devices:
+            matched_left = find_matching_device_index(
+                target_path=left_path,
+                target_name=left_name,
+                fallback_index=left,
+                devices=devices,
+            )
+            exclude = {matched_left} if matched_left is not None else set()
+            matched_right = find_matching_device_index(
+                target_path=right_path,
+                target_name=right_name,
+                fallback_index=right,
+                exclude_indices=exclude,
+                devices=devices,
+            )
+
+            if (
+                matched_left is not None
+                and matched_right is not None
+                and matched_left != matched_right
+            ):
+                if matched_left != left or matched_right != right:
+                    print(
+                        f"[CameraSelect] Auto-remapped saved camera IDs to match hardware: "
+                        f"Left {left}->{matched_left}, Right {right}->{matched_right}"
+                    )
+                return matched_left, matched_right
+    except Exception:
+        pass
+
+    return left, right
 
 
-def save_camera_config(config_path: Path, left_cam: int, right_cam: int) -> None:
-    """Persist (left_cam, right_cam) to JSON config."""
+def save_camera_config(
+    config_path: Path,
+    left_cam: int,
+    right_cam: int,
+    devices: Optional[list[VideoDevice]] = None,
+) -> None:
+    """Persist (left_cam, right_cam) and hardware paths/names to JSON config."""
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"left_cam": int(left_cam), "right_cam": int(right_cam)}
+        left_dev = None
+        right_dev = None
+        try:
+            if devices is None:
+                devices = enumerate_capture_devices()
+            left_dev = get_device_by_index(left_cam, devices)
+            right_dev = get_device_by_index(right_cam, devices)
+        except Exception:
+            pass
+
+        payload = {
+            "left_cam": int(left_cam),
+            "right_cam": int(right_cam),
+            "left_name": left_dev.name if left_dev else "",
+            "left_path": left_dev.path if left_dev else "",
+            "right_name": right_dev.name if right_dev else "",
+            "right_path": right_dev.path if right_dev else "",
+        }
         config_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     except Exception as err:
         print(f"[CameraSelect] [WARN] Could not save camera config to {config_path}: {err}")
@@ -182,13 +268,26 @@ def open_available_cameras(
     max_index: int = 8,
     preview_width: int = 640,
     preview_height: int = 480,
+    ignore_virtual: bool = True,
+    devices: Optional[list[VideoDevice]] = None,
 ) -> dict[int, cv2.VideoCapture]:
     """Probe indices 0..max_index-1 and return open VideoCapture streams keyed by camera ID."""
     backend = get_backend()
     cameras: dict[int, cv2.VideoCapture] = {}
 
+    if devices is None:
+        try:
+            devices = enumerate_capture_devices()
+        except Exception:
+            devices = []
+
+    virtual_indices = {d.index for d in devices if d.is_virtual} if ignore_virtual else set()
+
     with SuppressStderr():
         for idx in range(max_index):
+            if idx in virtual_indices:
+                continue
+
             cap = cv2.VideoCapture(idx, backend)
             if not cap.isOpened() and backend != cv2.CAP_ANY and platform.system() != "Windows":
                 cap = cv2.VideoCapture(idx)
@@ -197,7 +296,7 @@ def open_available_cameras(
                 cap.release()
                 continue
 
-            # Request 640x480 MJPG so 3-4 USB cameras can stream simultaneously within USB 2.0 bandwidth
+            # Request 640x480 MJPG so USB cameras can stream simultaneously within USB 2.0 bandwidth
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, preview_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, preview_height)
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -237,6 +336,7 @@ def annotate_camera_frame(
     saved_left: int,
     saved_right: int,
     tile_size: tuple[int, int] = (480, 300),
+    device_name: str = "",
 ) -> np.ndarray:
     """Render a single camera frame into a fixed-size tile annotated with ID and LEFT/RIGHT."""
     tw, th = tile_size
@@ -289,13 +389,19 @@ def annotate_camera_frame(
     cv2.rectangle(overlay, (0, 0), (tw, banner_h), (18, 20, 26), -1)
     cv2.addWeighted(overlay, 0.78, tile, 0.22, 0, tile)
 
-    label = f"ID: {cam_id}{role_text}"
+    label = f"ID: {cam_id}"
+    if device_name:
+        disp_name = device_name if len(device_name) <= 16 else f"{device_name[:14]}.."
+        label += f" ({disp_name})"
+    label += role_text
+
+    font_scale = 0.70 if device_name else 0.85
     cv2.putText(
         tile,
         label,
-        (14, 30),
+        (12, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.85,
+        font_scale,
         accent_bgr,
         2,
         cv2.LINE_AA,
@@ -407,9 +513,13 @@ def select_stereo_cameras(
     cli_left: Optional[int] = None,
     cli_right: Optional[int] = None,
     max_probe_index: int = 8,
+    ignore_virtual: bool = True,
 ) -> tuple[int, int]:
     """Discover cameras, stream annotated preview, prompt user in terminal, and save choice."""
-    saved_left, saved_right = load_camera_config(config_path)
+    devices = enumerate_capture_devices()
+    dev_by_idx = {d.index: d for d in devices}
+
+    saved_left, saved_right = load_camera_config(config_path, devices=devices)
     if cli_left is not None:
         saved_left = cli_left
     if cli_right is not None:
@@ -425,16 +535,22 @@ def select_stereo_cameras(
     print("\n" + "=" * 70)
     print("  STEP 0: STEREO CAMERA DISCOVERY & SELECTION")
     print("  Scanning connected cameras...")
-    cameras = open_available_cameras(max_index=max_probe_index)
+    cameras = open_available_cameras(
+        max_index=max_probe_index,
+        ignore_virtual=ignore_virtual,
+        devices=devices,
+    )
     available_ids = sorted(cameras.keys())
 
     def print_status_banner() -> None:
         print("-" * 70)
         if available_ids:
-            details = []
+            print("  Available cameras :")
             for cid in available_ids:
                 w = int(cameras[cid].get(cv2.CAP_PROP_FRAME_WIDTH))
                 h = int(cameras[cid].get(cv2.CAP_PROP_FRAME_HEIGHT))
+                dev = dev_by_idx.get(cid)
+                dev_label = f" {dev.label}" if dev else ""
                 tag = ""
                 if cid == saved_left and cid == saved_right:
                     tag = " [saved LEFT & RIGHT]"
@@ -442,11 +558,27 @@ def select_stereo_cameras(
                     tag = " [saved LEFT]"
                 elif cid == saved_right:
                     tag = " [saved RIGHT]"
-                details.append(f"ID {cid} ({w}x{h}){tag}")
-            print("  Available cameras : " + ", ".join(details))
+                print(f"    - ID {cid}{dev_label} ({w}x{h}){tag}")
         else:
             print("  Available cameras : NONE DETECTED")
+
+        # Report ignored virtual devices if any exist
+        ignored_virtuals = [d for d in devices if d.is_virtual]
+        if ignored_virtuals and ignore_virtual:
+            virt_str = ", ".join(f"ID {d.index} ('{d.name}')" for d in ignored_virtuals)
+            print(f"  Ignored virtual   : {virt_str}")
+
         print(f"  Saved assignment  : Left = {saved_left}, Right = {saved_right}")
+
+        # Check if physical external cameras are connected
+        usb_cameras = [d for d in devices if not d.is_virtual and not d.is_integrated and d.index in available_ids]
+        if not usb_cameras and available_ids:
+            print(
+                "  [WARN] No external USB stereo cameras detected among active streams!\n"
+                "         Only internal/built-in cameras are responding. Please verify that your\n"
+                "         stereo USB webcams are securely plugged in and not captured by a VM."
+            )
+
         if len(available_ids) >= 2:
             missing_saved = [c for c in (saved_left, saved_right) if c not in available_ids]
             if missing_saved:
@@ -498,6 +630,8 @@ def select_stereo_cameras(
                     ret, frame = cap.read()
                     if ret and frame is not None and frame.size > 0:
                         last_frames[cid] = frame
+                dev = dev_by_idx.get(cid)
+                dev_name = dev.name if dev else ""
                 tiles.append(
                     annotate_camera_frame(
                         last_frames.get(cid),
@@ -505,6 +639,7 @@ def select_stereo_cameras(
                         saved_left=saved_left,
                         saved_right=saved_right,
                         tile_size=tile_size,
+                        device_name=dev_name,
                     )
                 )
 
@@ -537,7 +672,13 @@ def select_stereo_cameras(
             if cmd_lower == "rescan":
                 _release_cameras(cameras, had_window=False)
                 print("  Rescanning connected cameras...")
-                cameras = open_available_cameras(max_index=max_probe_index)
+                devices = enumerate_capture_devices(force_refresh=True)
+                dev_by_idx = {d.index: d for d in devices}
+                cameras = open_available_cameras(
+                    max_index=max_probe_index,
+                    ignore_virtual=ignore_virtual,
+                    devices=devices,
+                )
                 available_ids = sorted(cameras.keys())
                 last_frames = {cid: None for cid in available_ids}
                 tile_size = (480, 300) if len(available_ids) <= 2 else (400, 250)
@@ -561,7 +702,7 @@ def select_stereo_cameras(
     finally:
         _release_cameras(cameras, had_window=has_display)
 
-    save_camera_config(config_path, chosen_left, chosen_right)
+    save_camera_config(config_path, chosen_left, chosen_right, devices=devices)
     print(f"[CameraSelect] Confirmed & saved stereo pair: Left = {chosen_left}, Right = {chosen_right}")
     print("=" * 70 + "\n")
     return chosen_left, chosen_right
