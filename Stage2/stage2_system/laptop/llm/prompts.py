@@ -62,7 +62,7 @@ The robot has visited the following locations:
 - Inspected Object Locations: {inspected_locations}
 
 ### REFERENCE INFORMATION:
-- Reference height: The pedestal/box the objects sit upon is 9.0 cm high.
+- Reference height: The pedestal/box the objects sit upon is 7.0 cm high.
 - Known possible objects (roughly from smallest to tallest):
   1. Apple (~7-9 cm)
   2. Cake
@@ -75,7 +75,7 @@ The robot has visited the following locations:
   9. Vase (~25-35 cm)
   10. Bottle 1.5L (~30-35 cm)
 
-### PRELIMINARY GPU SERVER STEREO & YOLO ESTIMATES:
+### PRELIMINARY GPU SERVER STEREO & YOLO ESTIMATES (Note: The preliminary estimates are very inacurate and YOLO often detects the incorrect object, e.g. a TV (which is not a possible object) in the background. Trust your own reasoning over the estimates from YOLO (the GPU Server)):
 {preliminary_estimates}
 
 ### INSTRUCTIONS:
