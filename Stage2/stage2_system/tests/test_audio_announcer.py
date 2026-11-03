@@ -24,7 +24,6 @@ class TestAudioAnnouncer(unittest.TestCase):
 
     def test_announce_level_start_sequence(self):
         self.announcer.announce_level_start(1, wait=False)
-        self.assertIn("What's up Beijing!", self.announcer.history)
         self.assertIn("Starting Level 1", self.announcer.history)
 
     def test_announce_going_to_point(self):
@@ -87,14 +86,14 @@ class TestAudioAnnouncer(unittest.TestCase):
         self.assertIn("Returning to start position", self.announcer.history)
 
     def test_alias_resolution(self):
-        (self.temp_dir / "wazzup_beijing.mp3").write_bytes(b"dummy")
         (self.temp_dir / "zero.mp3").write_bytes(b"dummy")
         (self.temp_dir / "failed_to_go_to_point.mp3").write_bytes(b"dummy")
+        (self.temp_dir / "proceeding_to_point.mp3").write_bytes(b"dummy")
 
         # Querying with alternate/short alias
-        self.assertIsNotNone(self.announcer.find_clip("whats_up_beijing.mp3"))
         self.assertIsNotNone(self.announcer.find_clip("0.mp3"))
         self.assertIsNotNone(self.announcer.find_clip("failed_point.mp3"))
+        self.assertIsNotNone(self.announcer.find_clip("proceeding_to.mp3"))
 
     def test_real_audio_directory_has_all_clips(self):
         """Verify that the real Stage2/stage2_system/laptop/audio folder has all required clips."""
@@ -103,7 +102,6 @@ class TestAudioAnnouncer(unittest.TestCase):
 
         # Check all core action clips
         expected_actions = [
-            "wazzup_beijing.mp3",
             "starting_level.mp3",
             "finished_level.mp3",
             "going_to_point.mp3",

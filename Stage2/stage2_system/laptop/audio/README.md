@@ -8,13 +8,7 @@ If any clip is missing or has not yet been placed here, the system automatically
 
 ---
 
-## 1. Intro Clip (1 Clip)
-- **`wazzup_beijing.mp3`** (or `whats_up_beijing.mp3`): Spoken script: *"What's up Beijing!"*
-  (Played at the start of every level before the robot moves).
-
----
-
-## 2. Action Lead-In Clips (8 Clips)
+## 1. Action Lead-In Clips (9 Clips)
 - **`starting_level.mp3`**: *"Starting Level"* (followed by level number, e.g. `one.mp3`)
 - **`finished_level.mp3`**: *"Finished Level"* (followed by level number, e.g. `three.mp3`)
 - **`going_to_point.mp3`**: *"Going to Point"* (followed by point letter, e.g. `b.mp3`)
@@ -27,7 +21,7 @@ If any clip is missing or has not yet been placed here, the system automatically
 
 ---
 
-## 3. Reusable Identifier Tokens (13 Clips)
+## 2. Reusable Identifier Tokens (13 Clips)
 
 ### Digits (4 Clips)
 - **`zero.mp3`** (or `0.mp3`): *"Zero"* (reused for Point 0)
@@ -55,7 +49,7 @@ Reused across going to, retrying, failing, proceeding to, and taking photo of po
 
 | Event | Composed Sequence | Resulting Spoken Audio |
 | :--- | :--- | :--- |
-| **Level 1 Start** | `wazzup_beijing.mp3` + `starting_level.mp3` + `one.mp3` | *"What's up Beijing! Starting Level One."* |
+| **Level 1 Start** | `starting_level.mp3` + `one.mp3` | *"Starting Level One."* |
 | **Move to Point 0** | `going_to_point.mp3` + `zero.mp3` | *"Going to Point Zero."* |
 | **Capture Task Screen** | `taking_photo_of_tasks.mp3` | *"Taking photo of tasks."* |
 | **Visit Point B** | `going_to_point.mp3` + `b.mp3` | *"Going to Point B."* |

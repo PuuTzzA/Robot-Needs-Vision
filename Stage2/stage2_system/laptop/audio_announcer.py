@@ -30,8 +30,6 @@ class AudioAnnouncer:
     """Thread-safe, non-blocking audio announcement manager."""
 
     CLIP_ALIASES: dict[str, list[str]] = {
-        "whats_up_beijing": ["wazzup_beijing", "whats_up_beijing"],
-        "wazzup_beijing": ["wazzup_beijing", "whats_up_beijing"],
         "failed_point": ["failed_to_go_to_point", "failed_point"],
         "failed_to_go_to_point": ["failed_to_go_to_point", "failed_point"],
         "proceeding_to": ["proceeding_to_point", "proceeding_to"],
@@ -203,14 +201,7 @@ class AudioAnnouncer:
         return f"{words.get(level, str(level))}.mp3"
 
     def announce_level_start(self, level: int, wait: bool = True) -> None:
-        """Play 'What's up Beijing' followed by 'Starting Level X'."""
-        # 1. 'What's up Beijing' (wazzup_beijing.mp3)
-        self.play_sequence(
-            clip_names=["wazzup_beijing.mp3"],
-            fallback_text="What's up Beijing!",
-            wait=wait,
-        )
-        # 2. 'Starting Level X' (starting_level.mp3 + one.mp3/etc)
+        """Announce 'Starting Level X'."""
         lvl_tok = self._level_token(level)
         self.play_sequence(
             clip_names=["starting_level.mp3", lvl_tok],
