@@ -147,6 +147,17 @@ ros2 launch turtlebot4_navigation localization.launch.py \
 source /opt/ros/humble/setup.bash
 source ~/turtlebot4_ws/install/setup.bash
 
+export CYCLONEDDS_URI=/etc/turtlebot4/cyclonedds_rpi.xml
+TUNED_FASTDDS="$HOME/Robot-Needs-Vision/Stage2/stage2_system/vm/fastdds_tuning.xml"
+if [ -f "${TUNED_FASTDDS}" ]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE="${TUNED_FASTDDS}"
+    export FASTDDS_DEFAULT_PROFILES_FILE="${TUNED_FASTDDS}"
+    export RMW_FASTRTPS_USE_QOS_FROM_XML=1
+elif [ -f /etc/turtlebot4/fastdds_rpi.xml ]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/turtlebot4/fastdds_rpi.xml
+fi
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
 ros2 launch turtlebot4_navigation nav2.launch.py \
     params_file:=$HOME/Robot-Needs-Vision/Stage2/vm_map_tools/maps/nav2_params.yaml
 ```
