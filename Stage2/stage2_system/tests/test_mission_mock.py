@@ -14,6 +14,7 @@ sys_root = Path(__file__).resolve().parent.parent
 if str(sys_root) not in sys.path:
     sys.path.insert(0, str(sys_root))
 
+from laptop.audio_announcer import AudioAnnouncer
 from laptop.camera import CameraManager
 from laptop.llm import llm_api, tasks as llm_tasks
 from laptop.llm.schemas import TaskLegibility
@@ -101,6 +102,7 @@ class TestMissionWorkflows(unittest.TestCase):
             keypoints=self.kps,
             runs_dir=self.temp_dir / "runs",
             camera_settle_s=0.08,
+            announcer=AudioAnnouncer(enabled=False),
         )
 
     def tearDown(self):
@@ -140,6 +142,12 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertEqual(goal_during_last_classify, [HOME_GOAL_NAME])
         self.assertTrue(self.mission.last_processed_name.startswith("classified_point_"))
         self._assert_returned_to_start()
+        self.assertIn("What's up Beijing!", self.mission.announcer.history)
+        self.assertIn("Starting Level 1", self.mission.announcer.history)
+        self.assertIn("Going to Point 0", self.mission.announcer.history)
+        self.assertIn("Taking photo of tasks", self.mission.announcer.history)
+        self.assertIn("Taking photo of Point B", self.mission.announcer.history)
+        self.assertIn("Finished Level 1", self.mission.announcer.history)
         print(f"[TEST PASS] Level 1 Verified: {result}")
 
     def test_level_2_workflow_overlay_and_return_to_start(self):
@@ -156,6 +164,12 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertTrue(len(result) > 0, "Level 2 result should not be empty")
         self.assertTrue(self.mission.last_processed_name.startswith("classified_point_"))
         self._assert_returned_to_start()
+        self.assertIn("What's up Beijing!", self.mission.announcer.history)
+        self.assertIn("Starting Level 2", self.mission.announcer.history)
+        self.assertIn("Going to Point 0", self.mission.announcer.history)
+        self.assertIn("Taking photo of tasks", self.mission.announcer.history)
+        self.assertIn("Taking photo of Point B", self.mission.announcer.history)
+        self.assertIn("Finished Level 2", self.mission.announcer.history)
         print(f"[TEST PASS] Level 2 Verified: {result}")
 
     def test_level_3_async_legibility_immediate_preview_and_parallel_return(self):
@@ -241,6 +255,11 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertEqual(len(solve_calls), 1)
         self.assertTrue(self.mission.last_processed_name.startswith("measured_"))
         self._assert_returned_to_start()
+        self.assertIn("What's up Beijing!", self.mission.announcer.history)
+        self.assertIn("Starting Level 3", self.mission.announcer.history)
+        self.assertIn("Taking photo of tasks", self.mission.announcer.history)
+        self.assertIn("Taking photo of Point B", self.mission.announcer.history)
+        self.assertIn("Finished Level 3", self.mission.announcer.history)
         print(f"[TEST PASS] Level 3 Verified: {result}")
 
     def test_level_3_illegible_task_returns_to_point_0_once_without_rechecking(self):
@@ -317,6 +336,8 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertFalse(self.mission.is_running())
         self.assertEqual(classified_order_1, ["B", "D", "C"])
         self.assertIn("Failed to get to C, continuing with D", statuses)
+        self.assertIn("Failed to go to Point C, proceeding to Point D", self.mission.announcer.history)
+        self.assertIn("Retrying to go to Point C", self.mission.announcer.history)
 
         # --- Part 2: Last-keypoint failure (visit B, D; D fails first time -> closest other kp C -> return to D) ---
         statuses.clear()

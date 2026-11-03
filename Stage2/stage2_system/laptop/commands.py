@@ -97,6 +97,7 @@ class CommandDispatcher:
                     return "[ERROR] Usage: Goto <PointName> (e.g. 'Goto B'), Goto Start, or Goto #<id>"
                 target = args[0]
                 if target.upper() in ("START", "HOME"):
+                    self.m.announcer.play_sequence(["returning_to_start.mp3"], fallback_text="Returning to start position")
                     ok, _seq, msg = self.m.robot.goto_home()
                     return "Navigating back to initial Start position..." if ok else f"Goto Start failed: {msg}"
                 if target.startswith("#"):
@@ -105,6 +106,7 @@ class CommandDispatcher:
                         kp = self.m.keypoints.get_by_id(kp_id)
                         if not kp:
                             return f"[ERROR] Keypoint ID {kp_id} not found."
+                        self.m.announcer.announce_going_to_point(kp.name)
                         ok, _seq, msg = self.m.robot.goto_keypoint(kp.id)
                         return f"Navigating to Keypoint ID {kp.id} ('{kp.name}')..." if ok else f"Goto failed: {msg}"
                     except ValueError:
@@ -115,6 +117,7 @@ class CommandDispatcher:
                     kp = self.m.keypoints.select_entry(pt_name, robot_xy=cur_pose, min_visibility=0.0)
                     if not kp:
                         return f"[ERROR] Keypoint '{pt_name}' not found in keypoint store."
+                    self.m.announcer.announce_going_to_point(pt_name)
                     ok, _seq, msg = self.m.robot.goto_keypoint(kp.id)
                     return f"Navigating to Point {pt_name} (ID {kp.id})..." if ok else f"Goto failed: {msg}"
 

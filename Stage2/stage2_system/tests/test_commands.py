@@ -50,6 +50,10 @@ class TestCommands(unittest.TestCase):
         self.assertIn("B", pts)
         self.assertIn("0", pts)
 
+    def test_goto_triggers_audio_announcement(self):
+        self.dispatcher.execute("Goto B")
+        self.assertIn("Going to Point B", self.mission.announcer.history)
+
     def test_teleop_command(self):
         res = self.dispatcher.execute("W")
         self.assertIn("Teleop", res)

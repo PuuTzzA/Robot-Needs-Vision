@@ -26,6 +26,7 @@ from shared.protocol import (
     HOME_GOAL_NAME,
     TASK_POINT_NAME,
 )
+from .audio_announcer import AudioAnnouncer
 from .camera import CameraManager
 from .llm import tasks as llm_tasks
 from .llm.schemas import TaskLegibility
@@ -48,6 +49,7 @@ class MissionManager:
         goal_timeout_s: float = 60.0,
         stuck_timeout_s: float = 10.0,
         max_point_retries: int = 1,
+        announcer: Optional[AudioAnnouncer] = None,
     ) -> None:
         self.camera = camera
         self.robot = robot
@@ -58,6 +60,7 @@ class MissionManager:
         self.goal_timeout_s = max(0.5, float(goal_timeout_s))
         self.stuck_timeout_s = max(0.1, float(stuck_timeout_s))
         self.max_point_retries = max(0, int(max_point_retries))
+        self.announcer = announcer or AudioAnnouncer()
 
         self.current_level: int = 0
         self.status_text: str = "Idle (Ready)"
@@ -137,6 +140,7 @@ class MissionManager:
     def stop(self) -> None:
         """Cancel active navigation and abort running mission."""
         self._cancel_event.set()
+        self.announcer.stop_current()
         self.robot.cancel_navigation()
         self.set_status("Aborted / Stopped by User")
 
@@ -305,6 +309,7 @@ class MissionManager:
             next_pt = pending[0]
             msg = f"Failed to get to {failed_pt}, continuing with {next_pt}"
             self.set_status(msg)
+            self.announcer.announce_failed_point(failed_pt=failed_pt, proceeding_to=next_pt)
             if can_retry:
                 retry_counts[failed_pt] = attempts + 1
                 pending.insert(1, failed_pt)
@@ -329,11 +334,13 @@ class MissionManager:
         if detour_kp is None:
             retry_msg = f"Failed to get to {failed_pt}, retrying {failed_pt}"
             self.set_status(retry_msg)
+            self.announcer.announce_failed_point(failed_pt=failed_pt, proceeding_to=None)
             pending.insert(0, failed_pt)
             return cur_xy, retry_msg
 
         detour_msg = f"Failed to get to {failed_pt}, continuing with {detour_kp.name}"
         self.set_status(detour_msg)
+        self.announcer.announce_failed_point(failed_pt=failed_pt, proceeding_to=detour_kp.name)
         detour_ok = self._navigate_to_entry(detour_kp, status_text=detour_msg, settle=False)
         if self._cancel_event.is_set():
             return cur_xy, None
@@ -357,6 +364,9 @@ class MissionManager:
             task_kp = self.keypoints.select_entry(pt_name, robot_xy=cur_xy, min_visibility=0.0)
             if not task_kp:
                 raise RuntimeError("Task Point '0' not found in keypoints store!")
+
+            is_retry = retry_counts.get(pt_name, 0) > 0
+            self.announcer.announce_going_to_point(pt_name, is_retry=is_retry)
 
             if self._navigate_to_entry(task_kp, status_text=next_status):
                 return task_kp
@@ -387,6 +397,7 @@ class MissionManager:
 
         if ok:
             print(f"[Mission] Dispatched return to Start position (Goal #{seq}).")
+            self.announcer.announce_returning_to_start()
             return seq
 
         print(f"[Mission] [WARN] Could not dispatch return to Start position: {msg}")
@@ -526,6 +537,8 @@ class MissionManager:
     # LEVEL 1 WORKFLOW
     # -------------------------------------------------------------------------
     def _run_level_1(self, session_dir: Path) -> None:
+        self.announcer.announce_level_start(1)
+
         # 1. Go to Point 0 (closest entry)
         task_kp = self._navigate_to_initial_task_point(level=1)
         if not task_kp:
@@ -533,6 +546,7 @@ class MissionManager:
 
         # 2. Take picture of task instructions
         self.set_status("Level 1: Reading task instructions on laptop screen...")
+        self.announcer.announce_taking_photo_of_tasks()
         task_bytes, _ = self._capture_screen_or_object("task_level1", session_dir)
 
         # 3. LLM call to get points
@@ -569,6 +583,9 @@ class MissionManager:
             if not entry:
                 continue
 
+            is_retry = retry_counts.get(pt_name, 0) > 0
+            self.announcer.announce_going_to_point(pt_name, is_retry=is_retry)
+
             nav_ok = self._navigate_to_entry(entry, status_text=next_nav_status)
             next_nav_status = None
             if not nav_ok:
@@ -584,6 +601,7 @@ class MissionManager:
             cur_xy = (entry.x, entry.y)
 
             self.set_status(f"Level 1: Capturing Point {pt_name}...")
+            self.announcer.announce_taking_photo_of_point(pt_name)
             photo_bytes, photo_frame = self._capture_screen_or_object(f"point_{pt_name}", session_dir)
 
             # After the final required photo (no pending retries left), start driving back to Start in parallel
@@ -612,6 +630,7 @@ class MissionManager:
         res_parts = [f"Point {p}: {c}" for p, c in identified_objects.items()]
         final_str = ", ".join(res_parts) if res_parts else "No objects identified."
         self.set_result(1, final_str)
+        self.announcer.announce_level_finished(1, dynamic_result=final_str)
 
         if home_seq is None:
             home_seq = self._start_return_home()
@@ -621,6 +640,8 @@ class MissionManager:
     # LEVEL 2 WORKFLOW
     # -------------------------------------------------------------------------
     def _run_level_2(self, session_dir: Path) -> None:
+        self.announcer.announce_level_start(2)
+
         # 1. Go to Point 0
         task_kp = self._navigate_to_initial_task_point(level=2)
         if not task_kp:
@@ -628,6 +649,7 @@ class MissionManager:
 
         # 2. Take picture of task instructions
         self.set_status("Level 2: Reading task instructions on laptop screen...")
+        self.announcer.announce_taking_photo_of_tasks()
         task_bytes, _ = self._capture_screen_or_object("task_level2", session_dir)
 
         # 3. LLM call to get target categories
@@ -662,6 +684,9 @@ class MissionManager:
             if not entry:
                 continue
 
+            is_retry = retry_counts.get(pt_name, 0) > 0
+            self.announcer.announce_going_to_point(pt_name, is_retry=is_retry)
+
             nav_ok = self._navigate_to_entry(entry, status_text=next_nav_status)
             next_nav_status = None
             if not nav_ok:
@@ -677,6 +702,7 @@ class MissionManager:
             cur_xy = (entry.x, entry.y)
 
             self.set_status(f"Level 2: Capturing Point {pt_name}...")
+            self.announcer.announce_taking_photo_of_point(pt_name)
             photo_bytes, photo_frame = self._capture_screen_or_object(f"point_{pt_name}", session_dir)
 
             # If this is the final candidate point in the venue (no pending points left), return home in parallel
@@ -717,6 +743,7 @@ class MissionManager:
         res_parts = [f"{orig_c.title()} at Point {pt}" for orig_c, (pt, _) in found_map.items()]
         final_str = ", ".join(res_parts) if res_parts else "None of the target objects were found."
         self.set_result(2, final_str)
+        self.announcer.announce_level_finished(2, dynamic_result=final_str)
 
         if home_seq is None:
             home_seq = self._start_return_home()
@@ -726,6 +753,8 @@ class MissionManager:
     # LEVEL 3 WORKFLOW
     # -------------------------------------------------------------------------
     def _run_level_3(self, session_dir: Path) -> None:
+        self.announcer.announce_level_start(3)
+
         # 1. Go to Point 0
         task_kp = self._navigate_to_initial_task_point(level=3)
         if not task_kp:
@@ -733,6 +762,7 @@ class MissionManager:
 
         # 2. Capture task screen photo and immediately launch async LLM legibility check while driving
         self.set_status("Level 3: Capturing task instructions at Point 0...")
+        self.announcer.announce_taking_photo_of_tasks()
         task_bytes, _ = self._capture_screen_or_object("task_level3", session_dir)
 
         llm_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Level3Legibility")
@@ -853,6 +883,9 @@ class MissionManager:
                     if not entry:
                         continue
 
+                    is_retry = retry_counts.get(pt_name, 0) > 0
+                    self.announcer.announce_going_to_point(pt_name, is_retry=is_retry)
+
                     if pt_name == TASK_POINT_NAME and next_nav_status is None:
                         nav_prompt: Optional[str] = (
                             "Level 3: Question not legible — returning to Point 0 for retake..."
@@ -878,10 +911,12 @@ class MissionManager:
                     if pt_name == TASK_POINT_NAME:
                         # Single retake at Point 0 — do NOT check legibility a second time
                         self.set_status("Level 3: Retaking task instructions photo at Point 0...")
+                        self.announcer.announce_taking_photo_of_tasks()
                         task_bytes, _ = self._capture_screen_or_object("task_level3_retake", session_dir)
                         continue
 
                     self.set_status(f"Level 3: Capturing stereo pair at Point {pt_name}...")
+                    self.announcer.announce_taking_photo_of_point(pt_name)
                     photo_bytes, photo_frame, right_frame = self._capture_stereo_frames_immediate(
                         f"point_{pt_name}",
                         session_dir,
@@ -952,4 +987,5 @@ class MissionManager:
 
         final_str = f"Answer: {solution.answer}"
         self.set_result(3, final_str)
+        self.announcer.announce_level_finished(3, dynamic_result=solution.answer)
         self._await_return_home(home_seq, level=3, summary_extra=solution.answer)

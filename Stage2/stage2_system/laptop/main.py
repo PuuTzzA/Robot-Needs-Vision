@@ -23,6 +23,7 @@ from shared.protocol import (
     DEFAULT_SSH_SIZE_PORT,
     DEFAULT_VM_CMD_PORT,
 )
+from laptop.audio_announcer import AudioAnnouncer
 from laptop.camera import CameraManager
 from laptop.camera_selector import (
     DEFAULT_CONFIG_FILENAME,
@@ -127,6 +128,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mock-size", action="store_true", help="Use offline simulated size estimation.")
     parser.add_argument("--no-gui", action="store_true", help="Run headless in terminal mode without Tkinter GUI.")
 
+    # Audio Announcements flags
+    parser.add_argument("--no-audio", action="store_true", help="Disable audio announcements and speech.")
+    parser.add_argument("--audio-volume", type=float, default=1.0, help="Audio volume (0.0 to 1.0, default: 1.0).")
+    parser.add_argument("--tts-voice", type=str, default=None, help="SAPI voice name substring (e.g. 'David', 'Zira').")
+
     return parser.parse_args()
 
 
@@ -194,6 +200,13 @@ def main() -> None:
 
     size_link = SizeLink(server_url=args.ssh_url, is_mock=args.mock_size)
 
+    # 4.5. Initialize Audio Announcer
+    announcer = AudioAnnouncer(
+        enabled=not args.no_audio,
+        volume=args.audio_volume,
+        voice_name=args.tts_voice,
+    )
+
     # 5. Initialize Mission Manager & Command Dispatcher
     mission = MissionManager(
         camera=camera,
@@ -202,6 +215,7 @@ def main() -> None:
         keypoints=kps,
         runs_dir=log_dir,
         camera_settle_s=args.settle_time,
+        announcer=announcer,
     )
     dispatcher = CommandDispatcher(mission=mission)
 
@@ -213,6 +227,7 @@ def main() -> None:
             root.mainloop()
         finally:
             mission.stop()
+            announcer.stop()
             camera.stop()
             robot.stop()
             console.stop()
@@ -230,6 +245,7 @@ def main() -> None:
             pass
         finally:
             mission.stop()
+            announcer.stop()
             camera.stop()
             robot.stop()
             console.stop()
