@@ -17,6 +17,10 @@ class Waypoints(BaseModel):
 class Category(BaseModel):
     category: str = Field(description="Object category name.")
     color: Optional[str] = Field(default=None, description="Primary color of the object, if identifiable.")
+    height_cm: Optional[float] = Field(
+        default=None,
+        description="Estimated height of the object in cm (excluding any supporting pedestal/box).",
+    )
     confidence: Optional[float] = Field(default=None, description="Model confidence score between 0.0 and 1.0.")
 
 

@@ -38,7 +38,7 @@ def parse_level1_task(task_photo_bytes: bytes, known_locations: list[str]) -> li
 
 
 def classify_object(photo_bytes: bytes, point_name: str) -> Category:
-    """Identify the category and color of the object at point_name from a photo."""
+    """Identify the category, color, and estimated height of the object at point_name from a photo."""
     cat_str = "\n".join(f"- {c}" for c in KNOWN_OBJECT_CATEGORIES)
     prompt = CLASSIFY_OBJECT_PROMPT.format(point=point_name, categories_list=cat_str)
     images = [LabeledImage(label=f"photo_point_{point_name}", jpeg_bytes=photo_bytes)]

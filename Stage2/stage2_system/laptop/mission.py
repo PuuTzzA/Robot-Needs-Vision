@@ -32,7 +32,7 @@ from .llm import tasks as llm_tasks
 from .llm.schemas import TaskLegibility
 from .robot_link import RobotLink
 from .size_link import SizeLink
-from .vision_overlay import draw_classification_overlay, draw_measurement_overlay
+from .vision_overlay import draw_classification_overlay, draw_measurement_overlay, format_height_cm
 
 
 class MissionManager:
@@ -608,20 +608,28 @@ class MissionManager:
             if not pending:
                 home_seq = self._start_return_home()
 
-            self.set_status(f"Level 1: Classifying object at Point {pt_name}...")
+            self.set_status(f"Level 1: Classifying object & height at Point {pt_name}...")
             category_res = llm_tasks.classify_object(photo_bytes, pt_name)
-            identified_objects[pt_name] = category_res.category
-            print(f"[Level 1] Point {pt_name} -> {category_res.category} ({category_res.color})")
+            h_str = format_height_cm(category_res.height_cm)
+            obj_summary = f"{category_res.category} ({h_str})" if h_str else category_res.category
+            identified_objects[pt_name] = obj_summary
+            print(
+                f"[Level 1] Point {pt_name} -> {category_res.category} "
+                f"(color: {category_res.color or 'n/a'}, height: {h_str or 'n/a'})"
+            )
 
             overlaid = draw_classification_overlay(
                 photo_frame,
                 title=f"Point {pt_name}",
                 category=category_res.category,
                 color=category_res.color,
+                height_cm=category_res.height_cm,
             )
             ann_name = f"classified_point_{pt_name}.jpg"
             self._save_jpeg(overlaid, session_dir / ann_name)
             self.set_processed_frame(overlaid, ann_name)
+            running_str = ", ".join(f"Point {p}: {v}" for p, v in identified_objects.items())
+            self.set_status(f"Level 1: Point {pt_name} -> {obj_summary}", extra=running_str)
 
         if self._cancel_event.is_set():
             return

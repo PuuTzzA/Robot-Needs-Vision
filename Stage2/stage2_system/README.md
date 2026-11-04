@@ -65,8 +65,8 @@ The architecture coordinates three separate execution nodes communicating over l
 3. For each target point (ordered by closest Euclidean distance):
    - Navigates to the closest recorded keypoint entry, settles ~1.0s, and captures a fresh photo.
    - Immediately dispatches parallel navigation back to the initial RViz **Start** pose once the final photo is taken.
-   - LLM classifies object category and overlays the classification result directly onto **Last Processed Frame**.
-4. Displays final result in bottom banner and completes return to **Start**.
+   - LLM classifies the object category and estimates its height (`height_cm`), overlaying both onto **Last Processed Frame**.
+4. Displays final result (object class and height per point) in the UI banners and completes return to **Start**.
 
 ### Level 2: Category Search & Early Exit
 1. Robot moves to **Point 0** (Task Center), settles ~1.0s, and captures a fresh photo of task instructions.

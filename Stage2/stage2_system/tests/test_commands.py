@@ -71,6 +71,7 @@ class TestCommands(unittest.TestCase):
             time.sleep(0.12)
             out = self.dispatcher.execute("Classify")
             self.assertIn("Classification:", out)
+            self.assertIn("11 cm", out)
             self.assertIsNotNone(self.mission.last_processed_frame)
             self.assertTrue(self.mission.last_processed_name.startswith("classified_"))
 

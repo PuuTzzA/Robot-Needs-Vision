@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from .llm import llm_api
 from .llm import tasks as llm_tasks
-from .vision_overlay import draw_classification_overlay, draw_measurement_overlay
+from .vision_overlay import draw_classification_overlay, draw_measurement_overlay, format_height_cm
 
 
 HELP_BANNER = """
@@ -205,9 +205,11 @@ class CommandDispatcher:
                     title="Manual Capture",
                     category=cat_res.category,
                     color=cat_res.color,
+                    height_cm=cat_res.height_cm,
                 )
                 self.m.set_processed_frame(overlaid, f"classified_{ts}.jpg")
-                return f"Classification: {cat_res.category} (Color: {cat_res.color or 'n/a'})"
+                h_str = format_height_cm(cat_res.height_cm)
+                return f"Classification: {cat_res.category} (Color: {cat_res.color or 'n/a'}, Height: {h_str or 'n/a'})"
 
             elif cmd in ("POINTS", "LIST"):
                 kps = self.m.keypoints.get_all()

@@ -199,15 +199,15 @@ def _mock_query_structured(
     if response_model is Category:
         # Infer from label if present, or assign mock category
         for img in images:
-            if "point_b" in img.label.lower():
-                return Category(category="Cup", color="white", confidence=0.92)  # type: ignore
-            elif "point_e" in img.label.lower():
-                return Category(category="Banana", color="yellow", confidence=0.88)  # type: ignore
-            elif "point_d" in img.label.lower():
-                return Category(category="Bottle", color="blue", confidence=0.95)  # type: ignore
-            elif "point_c" in img.label.lower():
-                return Category(category="Apple", color="red", confidence=0.90)  # type: ignore
-        return Category(category="Mug", color="blue", confidence=0.85)  # type: ignore
+            if img.label.lower().endswith("point_b"):
+                return Category(category="Cup", color="white", height_cm=11.0, confidence=0.92)  # type: ignore
+            elif img.label.lower().endswith("point_e"):
+                return Category(category="Banana", color="yellow", height_cm=15.0, confidence=0.88)  # type: ignore
+            elif img.label.lower().endswith("point_d"):
+                return Category(category="Bottle", color="blue", height_cm=23.0, confidence=0.95)  # type: ignore
+            elif img.label.lower().endswith("point_c"):
+                return Category(category="Apple", color="red", height_cm=8.0, confidence=0.90)  # type: ignore
+        return Category(category="Mug", color="blue", height_cm=11.0, confidence=0.85)  # type: ignore
 
     # 4. Level 3 Task Legibility Check
     if response_model is TaskLegibility:

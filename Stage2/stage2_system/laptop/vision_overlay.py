@@ -37,9 +37,20 @@ def _draw_banner_card(
     pad_x = max(10, int(w * 0.02))
     pad_y = max(8, int(h * 0.018))
     gap_y = max(6, int(h * 0.012))
+    bar_w = max(5, int(w * 0.008))
+    max_text_w = max(40, w - bar_w - pad_x * 2)
 
-    (_, hdr_h), hdr_base = cv2.getTextSize(header, font, scale_hdr, thick_hdr)
-    (_, main_h), main_base = cv2.getTextSize(main_line, font, scale_main, thick_main)
+    (hdr_w, hdr_h), hdr_base = cv2.getTextSize(header, font, scale_hdr, thick_hdr)
+    if hdr_w > max_text_w:
+        scale_hdr = max(0.35, scale_hdr * (max_text_w / float(hdr_w)))
+        thick_hdr = max(1, int(round(scale_hdr * 2.0)))
+        (_, hdr_h), hdr_base = cv2.getTextSize(header, font, scale_hdr, thick_hdr)
+
+    (main_w, main_h), main_base = cv2.getTextSize(main_line, font, scale_main, thick_main)
+    if main_w > max_text_w:
+        scale_main = max(0.40, scale_main * (max_text_w / float(main_w)))
+        thick_main = max(1, int(round(scale_main * 2.4)))
+        (_, main_h), main_base = cv2.getTextSize(main_line, font, scale_main, thick_main)
 
     box_h = pad_y * 2 + hdr_h + hdr_base + gap_y + main_h + main_base
     box_h = min(h, box_h)
@@ -54,7 +65,6 @@ def _draw_banner_card(
     cv2.addWeighted(overlay, 0.76, out, 0.24, 0, out)
 
     # Accent bar
-    bar_w = max(5, int(w * 0.008))
     cv2.rectangle(out, (0, y0), (bar_w, y1), accent_bgr, -1)
 
     text_x = bar_w + pad_x
@@ -66,23 +76,46 @@ def _draw_banner_card(
     return out
 
 
+def format_height_cm(height_cm: Optional[float]) -> Optional[str]:
+    """Format a positive height in centimeters cleanly (e.g. 11.0 -> '11 cm', 17.5 -> '17.5 cm')."""
+    if height_cm is None:
+        return None
+    try:
+        val = float(height_cm)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(val) or val <= 0:
+        return None
+    return f"{round(val, 1):g} cm"
+
+
 def draw_classification_overlay(
     frame: np.ndarray,
     title: str,
     category: str,
     color: Optional[str] = None,
+    height_cm: Optional[float] = None,
 ) -> np.ndarray:
-    """Overlay LLM classification result onto a copy of the captured image."""
+    """Overlay LLM classification (and optional height) result onto a copy of the captured image."""
     clean_cat = (category or "Unknown").strip()
     clean_color = (color or "").strip()
-    if clean_color and clean_color.lower() not in ("none", "n/a", "unknown"):
+    h_str = format_height_cm(height_cm)
+
+    has_color = bool(clean_color and clean_color.lower() not in ("none", "n/a", "unknown"))
+    if has_color and h_str:
+        label = f"{clean_cat} ({clean_color}) - {h_str}"
+    elif h_str:
+        label = f"{clean_cat} - {h_str}"
+    elif has_color:
         label = f"{clean_cat} ({clean_color})"
     else:
         label = clean_cat
 
+    header = f"{title} - Classification & Height" if h_str else f"{title} - Classification Result"
+
     return _draw_banner_card(
         frame,
-        header=f"{title} - Classification Result",
+        header=header,
         main_line=label,
         accent_bgr=(90, 235, 130),
         position="bottom",

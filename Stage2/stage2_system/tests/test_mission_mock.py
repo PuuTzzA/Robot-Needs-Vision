@@ -138,7 +138,8 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertFalse(self.mission.is_running(), "Level 1 timed out")
         result = self.mission.level_results.get(1, "")
         self.assertTrue(len(result) > 0, "Level 1 result should not be empty")
-        self.assertIn("Point", result)
+        self.assertIn("Point B: Cup (11 cm)", result)
+        self.assertIn("Point E: Banana (15 cm)", result)
         self.assertEqual(goal_during_last_classify, [HOME_GOAL_NAME])
         self.assertTrue(self.mission.last_processed_name.startswith("classified_point_"))
         self._assert_returned_to_start()
@@ -147,6 +148,7 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertIn("Taking photo of tasks", self.mission.announcer.history)
         self.assertIn("Taking photo of Point B", self.mission.announcer.history)
         self.assertIn("Finished Level 1", self.mission.announcer.history)
+        self.assertIn(result, self.mission.announcer.history)
         print(f"[TEST PASS] Level 1 Verified: {result}")
 
     def test_level_2_workflow_overlay_and_return_to_start(self):

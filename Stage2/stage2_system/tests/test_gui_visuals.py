@@ -174,6 +174,36 @@ class TestGuiVisuals(unittest.TestCase):
             self.assertEqual(kwargs["header"], "Point C: Estimated Depth and Class")
             self.assertEqual(kwargs["main_line"], "Bottle (2.5m)")
 
+    def test_classification_overlay_and_level1_ui_show_height(self):
+        """Verifies Level 1 classification overlay and UI banners state both class and height."""
+        from laptop.vision_overlay import draw_classification_overlay
+        from unittest.mock import patch
+
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        with patch("laptop.vision_overlay._draw_banner_card") as mock_banner:
+            mock_banner.return_value = frame
+            draw_classification_overlay(
+                frame,
+                title="Point B",
+                category="Smaller Vase",
+                color="white",
+                height_cm=17.5,
+            )
+            mock_banner.assert_called_once()
+            _, kwargs = mock_banner.call_args
+            self.assertEqual(kwargs["header"], "Point B - Classification & Height")
+            self.assertEqual(kwargs["main_line"], "Smaller Vase (white) - 17.5 cm")
+
+        self.mission.current_level = 1
+        lvl1_res = "Point B: Cup (11 cm), Point E: Banana (15 cm)"
+        self.mission.set_result(1, lvl1_res)
+        self.mission.set_status("Level 1 Complete! (Returned to Start)", extra=lvl1_res)
+        self.gui._update_loop()
+        self.root.update()
+        self.assertIn("Cup (11 cm)", self.gui.lbl_result.cget("text"))
+        self.assertIn("Banana (15 cm)", self.gui.lbl_result.cget("text"))
+        self.assertIn("Cup (11 cm)", self.gui.lbl_extra_info.cget("text"))
+
 
 if __name__ == "__main__":
     unittest.main()

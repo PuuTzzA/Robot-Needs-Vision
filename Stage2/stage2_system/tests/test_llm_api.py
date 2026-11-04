@@ -36,13 +36,21 @@ class TestDeepSeekAdapter(unittest.TestCase):
         self.assertFalse(hasattr(tasks, 'parse_level3_task'))
 
     def test_classification_request(self):
+        self.answer({'category': 'Cup', 'color': 'blue', 'height_cm': 11.0})
         result = tasks.classify_object(b'jpeg', 'B')
         self.assertEqual(result.category, 'Cup')
+        self.assertAlmostEqual(result.height_cm, 11.0)
         kw = self.post.call_args.kwargs
         body = json.loads(kw['data'])
         self.assertEqual(body['model'], 'deepseek-flash')
-        self.assertIn('Known object categories', body['messages'][1]['content'][0]['text'])
+        prompt_text = body['messages'][1]['content'][0]['text']
+        self.assertIn('Known object categories', prompt_text)
+        self.assertIn('Known possible objects (roughly from smallest to tallest', prompt_text)
+        self.assertIn('Book laying down (~1.5 cm)', prompt_text)
+        self.assertIn('Smaller Vase (~17.5 cm)', prompt_text)
+        self.assertIn('Bottle 1.5L (~30-35 cm)', prompt_text)
         self.assertIn('JSON Schema', body['messages'][0]['content'])
+        self.assertIn('height_cm', body['messages'][0]['content'])
         self.assertEqual(body['messages'][1]['content'][1]['text'], 'Image label: photo_point_B')
         self.assertTrue(
             body['messages'][1]['content'][2]['image_url']['url'].endswith(

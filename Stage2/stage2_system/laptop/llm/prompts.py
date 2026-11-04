@@ -26,12 +26,32 @@ Extract and return the names of the two points we need to visit.
 """
 
 CLASSIFY_OBJECT_PROMPT = """Analyze the attached photo of an object placed at Point {point}.
-Your task is to identify which category the object belongs to.
+Your task is to identify which category the object belongs to and estimate its height in centimeters (`height_cm`).
 
 Known object categories:
 {categories_list}
 
-Identify the object category and primary color.
+Supplementary information:
+- Reference height: The pedestal/box the objects sit upon is 7.0 cm high (estimate only the object's own height, excluding the pedestal/box). In rare cases there may be objects that are not listed.
+- Known possible objects (roughly from smallest to tallest, sometimes there are multiple candidates per category):
+  1. Book laying down (~1.5 cm)
+  2. Single Banana laying down (~3.5 cm)
+  3. Bowl (~7 cm)
+  4. Apple 1 (pinkish red) (~8 cm)
+  5. Apple 2 (dark red) (~10 cm)
+  6. Cake (~10 cm)
+  7. Mug/Cup (~11 cm)
+  8. Alarm clock (~13 cm)
+  9. Bundle of Bananas laying down (~15 cm)
+  10. Smaller Vase (~17.5 cm)
+  11. Book standing up (~22 cm)
+  12. Bottle 500ml (~23 cm)
+  13. Teddy Bear (sitting vs. standing height varies; typically taller than a 500ml bottle but smaller than the big vase, ~23 cm)
+  14. Bigger Vase (~23 cm)
+  15. Clock (big) (~29cm)
+  16. Bottle 1.5L (~30-35 cm)
+
+Identify the object category (using one of the known object categories above), primary color, and estimated height in cm (`height_cm`). Always provide a numeric height estimate in centimeters in `height_cm` based on the photo and the reference list above.
 """
 
 LEVEL2_TASK_PROMPT = """Analyze the attached photo of the laptop screen displaying task instructions.
