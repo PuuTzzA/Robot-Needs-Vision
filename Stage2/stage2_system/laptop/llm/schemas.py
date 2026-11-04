@@ -14,14 +14,40 @@ class Waypoints(BaseModel):
     waypoints: List[Waypoint] = Field(description="List of waypoints.")
 
 
+NO_OBJECT_SYNONYMS = frozenset(
+    {"none", "no object", "no_object", "empty", "empty box", "nothing", "null", "n/a"}
+)
+
+
+def is_none_category(category: Optional[str]) -> bool:
+    """Return True if a category string represents an empty box / no object present."""
+    if category is None:
+        return True
+    cleaned = category.strip().lower()
+    return not cleaned or cleaned in NO_OBJECT_SYNONYMS
+
+
 class Category(BaseModel):
-    category: str = Field(description="Object category name.")
-    color: Optional[str] = Field(default=None, description="Primary color of the object, if identifiable.")
+    category: str = Field(
+        description=(
+            "Object category name from the known categories, or 'None' if there is no object "
+            "on top of the pedestal/box (the box is empty)."
+        )
+    )
+    color: Optional[str] = Field(
+        default=None,
+        description="Primary color of the object if an object is present, or null if category is 'None'.",
+    )
     height_cm: Optional[float] = Field(
         default=None,
-        description="Estimated height of the object in cm (excluding any supporting pedestal/box).",
+        description="Estimated height of the object in cm (excluding any supporting pedestal/box), or null if category is 'None'.",
     )
     confidence: Optional[float] = Field(default=None, description="Model confidence score between 0.0 and 1.0.")
+
+    @property
+    def is_empty(self) -> bool:
+        """True when no object is present on the pedestal/box."""
+        return is_none_category(self.category)
 
 
 class Categories(BaseModel):

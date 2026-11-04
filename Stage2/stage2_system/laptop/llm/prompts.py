@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+NO_OBJECT_CATEGORY = "None"
+
 KNOWN_OBJECT_CATEGORIES = [
     "Clock",
     "Teddy Bear",
@@ -25,15 +27,17 @@ Known locations in the venue: {known_locations}.
 Extract and return the names of the two points we need to visit.
 """
 
-CLASSIFY_OBJECT_PROMPT = """Analyze the attached photo of an object placed at Point {point}.
-Your task is to identify which category the object belongs to and estimate its height in centimeters (`height_cm`).
+CLASSIFY_OBJECT_PROMPT = """Analyze the attached photo captured at Point {point}, showing a pedestal/box where an object may be placed.
+Your task is to determine whether an object is placed on top of the pedestal/box, and if so, identify which category it belongs to and estimate its height in centimeters (`height_cm`).
 
-Known object categories:
+Known object categories (use "None" if the pedestal/box is empty):
 {categories_list}
 
 Supplementary information:
+- Empty box ("None"): Sometimes there is NO object on top of the pedestal/box (the box is empty). Do NOT mistake the supporting pedestal/box itself or background room items (walls, chairs, laptops, TVs, etc.) for an object. If there is no object on the box, return `category = "None"`, `color = null`, and `height_cm = null`.
 - Reference height: The pedestal/box the objects sit upon is 7.0 cm high (estimate only the object's own height, excluding the pedestal/box). In rare cases there may be objects that are not listed.
 - Known possible objects (roughly from smallest to tallest, sometimes there are multiple candidates per category):
+  0. None / Empty box (no object on top of the pedestal/box -> category = "None", height_cm = null)
   1. Book laying down (~1.5 cm)
   2. Single Banana laying down (~3.5 cm)
   3. Bowl (~7 cm)
@@ -51,7 +55,7 @@ Supplementary information:
   15. Clock (big) (~29cm)
   16. Bottle 1.5L (~30-35 cm)
 
-Identify the object category (using one of the known object categories above), primary color, and estimated height in cm (`height_cm`). Always provide a numeric height estimate in centimeters in `height_cm` based on the photo and the reference list above.
+If an object is present on the pedestal/box, identify the object `category` (using one of the known object categories above), primary `color`, and a numeric height estimate in centimeters in `height_cm` based on the photo and the reference list above. If the pedestal/box is empty (no object on top of it), set `category` to `"None"`, `color` to `null`, and `height_cm` to `null`.
 """
 
 LEVEL2_TASK_PROMPT = """Analyze the attached photo of the laptop screen displaying task instructions.
@@ -83,6 +87,7 @@ The robot has visited the following locations:
 
 ### REFERENCE INFORMATION:
 - Reference height: The pedestal/box the objects sit upon is 7.0 cm high.
+- Empty boxes: Some pedestals/boxes may have NO object placed on them (empty box -> record `category = "None"`, `color = null`, `height_cm = null`; do not mistake the supporting box itself or background items for an object, and never count empty boxes as objects).
 - These reference heights are more accurate and trustworthy thatn the GPU server estimates. In rare cases there may be objects that are not listed. 
 - Known possible objects (roughly from smallest to tallest, sometimes there are multiple candidates per category):
   1. Book laying down (~1.5 cm)

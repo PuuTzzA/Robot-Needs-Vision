@@ -45,6 +45,7 @@ class TestDeepSeekAdapter(unittest.TestCase):
         self.assertEqual(body['model'], 'deepseek-flash')
         prompt_text = body['messages'][1]['content'][0]['text']
         self.assertIn('Known object categories', prompt_text)
+        self.assertIn('None (no object', prompt_text)
         self.assertIn('Known possible objects (roughly from smallest to tallest', prompt_text)
         self.assertIn('Book laying down (~1.5 cm)', prompt_text)
         self.assertIn('Smaller Vase (~17.5 cm)', prompt_text)
@@ -58,6 +59,15 @@ class TestDeepSeekAdapter(unittest.TestCase):
             )
         )
         self.assertFalse(kw['allow_redirects'])
+
+    def test_classification_empty_box_none_option(self):
+        for raw_cat in ('None', 'none', 'No object', 'Empty box'):
+            self.answer({'category': raw_cat, 'color': 'none', 'height_cm': 0.0})
+            res = tasks.classify_object(b'jpeg', 'B')
+            self.assertTrue(res.is_empty)
+            self.assertEqual(res.category, 'None')
+            self.assertIsNone(res.color)
+            self.assertIsNone(res.height_cm)
 
     def test_task_parsers_and_legibility_check(self):
         self.answer({'waypoints': [{'name': ' b '}, {'name': 'E'}]})

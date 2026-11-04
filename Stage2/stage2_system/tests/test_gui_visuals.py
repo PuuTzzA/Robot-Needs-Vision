@@ -194,6 +194,21 @@ class TestGuiVisuals(unittest.TestCase):
             self.assertEqual(kwargs["header"], "Point B - Classification & Height")
             self.assertEqual(kwargs["main_line"], "Smaller Vase (white) - 17.5 cm")
 
+        with patch("laptop.vision_overlay._draw_banner_card") as mock_empty_banner:
+            mock_empty_banner.return_value = frame
+            draw_classification_overlay(
+                frame,
+                title="Point E",
+                category="None",
+                color=None,
+                height_cm=None,
+            )
+            mock_empty_banner.assert_called_once()
+            _, empty_kwargs = mock_empty_banner.call_args
+            self.assertEqual(empty_kwargs["header"], "Point E - Classification Result")
+            self.assertEqual(empty_kwargs["main_line"], "None (Empty Box)")
+            self.assertEqual(empty_kwargs["accent_bgr"], (60, 200, 255))
+
         self.mission.current_level = 1
         lvl1_res = "Point B: Cup (11 cm), Point E: Banana (15 cm)"
         self.mission.set_result(1, lvl1_res)

@@ -208,6 +208,8 @@ class CommandDispatcher:
                     height_cm=cat_res.height_cm,
                 )
                 self.m.set_processed_frame(overlaid, f"classified_{ts}.jpg")
+                if cat_res.is_empty:
+                    return "Classification: None (empty box)"
                 h_str = format_height_cm(cat_res.height_cm)
                 return f"Classification: {cat_res.category} (Color: {cat_res.color or 'n/a'}, Height: {h_str or 'n/a'})"
 

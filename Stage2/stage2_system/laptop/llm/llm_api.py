@@ -207,7 +207,7 @@ def _mock_query_structured(
                 return Category(category="Bottle", color="blue", height_cm=23.0, confidence=0.95)  # type: ignore
             elif img.label.lower().endswith("point_c"):
                 return Category(category="Apple", color="red", height_cm=8.0, confidence=0.90)  # type: ignore
-        return Category(category="Mug", color="blue", height_cm=11.0, confidence=0.85)  # type: ignore
+        return Category(category="None", color=None, height_cm=None, confidence=0.97) if any(img.label.lower().endswith("point_empty") for img in images) else Category(category="Mug", color="blue", height_cm=11.0, confidence=0.85)  # type: ignore
 
     # 4. Level 3 Task Legibility Check
     if response_model is TaskLegibility:

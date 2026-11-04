@@ -610,13 +610,17 @@ class MissionManager:
 
             self.set_status(f"Level 1: Classifying object & height at Point {pt_name}...")
             category_res = llm_tasks.classify_object(photo_bytes, pt_name)
-            h_str = format_height_cm(category_res.height_cm)
-            obj_summary = f"{category_res.category} ({h_str})" if h_str else category_res.category
+            if category_res.is_empty:
+                obj_summary = "None"
+                print(f"[Level 1] Point {pt_name} -> None (empty box)")
+            else:
+                h_str = format_height_cm(category_res.height_cm)
+                obj_summary = f"{category_res.category} ({h_str})" if h_str else category_res.category
+                print(
+                    f"[Level 1] Point {pt_name} -> {category_res.category} "
+                    f"(color: {category_res.color or 'n/a'}, height: {h_str or 'n/a'})"
+                )
             identified_objects[pt_name] = obj_summary
-            print(
-                f"[Level 1] Point {pt_name} -> {category_res.category} "
-                f"(color: {category_res.color or 'n/a'}, height: {h_str or 'n/a'})"
-            )
 
             overlaid = draw_classification_overlay(
                 photo_frame,
@@ -720,7 +724,10 @@ class MissionManager:
             self.set_status(f"Level 2: Classifying object at Point {pt_name}...")
             cat_res = llm_tasks.classify_object(photo_bytes, pt_name)
             detected_cat = cat_res.category.strip()
-            print(f"[Level 2] Point {pt_name} contains: {detected_cat} ({cat_res.color})")
+            if cat_res.is_empty:
+                print(f"[Level 2] Point {pt_name} contains: None (empty box)")
+            else:
+                print(f"[Level 2] Point {pt_name} contains: {detected_cat} ({cat_res.color})")
 
             overlaid = draw_classification_overlay(
                 photo_frame,
@@ -732,12 +739,13 @@ class MissionManager:
             self._save_jpeg(overlaid, session_dir / ann_name)
             self.set_processed_frame(overlaid, ann_name)
 
-            # Check if this matches one of our target categories
-            for target in target_norm:
-                if target in detected_cat.lower() or detected_cat.lower() in target:
-                    if target not in found_map:
-                        found_map[target] = (pt_name, detected_cat)
-                        print(f"[Level 2] MATCH! Found target '{target}' at Point {pt_name}!")
+            # Check if this matches one of our target categories (skip empty boxes)
+            if not cat_res.is_empty and detected_cat:
+                for target in target_norm:
+                    if target in detected_cat.lower() or detected_cat.lower() in target:
+                        if target not in found_map:
+                            found_map[target] = (pt_name, detected_cat)
+                            print(f"[Level 2] MATCH! Found target '{target}' at Point {pt_name}!")
 
             # If all targets found, exit immediately and return to Start
             if len(found_map) >= len(target_norm):

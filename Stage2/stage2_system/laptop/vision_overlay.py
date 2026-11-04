@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 
 from shared.protocol import DetectionItem, MeasurementResult
+from .llm.schemas import is_none_category
 
 
 def _draw_banner_card(
@@ -97,7 +98,17 @@ def draw_classification_overlay(
     height_cm: Optional[float] = None,
 ) -> np.ndarray:
     """Overlay LLM classification (and optional height) result onto a copy of the captured image."""
-    clean_cat = (category or "Unknown").strip()
+    raw_cat = (category or "").strip()
+    if raw_cat and is_none_category(raw_cat):
+        return _draw_banner_card(
+            frame,
+            header=f"{title} - Classification Result",
+            main_line="None (Empty Box)",
+            accent_bgr=(60, 200, 255),
+            position="bottom",
+        )
+
+    clean_cat = raw_cat or "Unknown"
     clean_color = (color or "").strip()
     h_str = format_height_cm(height_cm)
 

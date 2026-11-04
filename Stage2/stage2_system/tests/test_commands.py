@@ -63,7 +63,10 @@ class TestCommands(unittest.TestCase):
         self.assertIn("Ping SSH", res)
 
     def test_classify_overlays_processed_frame_and_camreset(self):
-        from laptop.llm import llm_api
+        from laptop.llm import llm_api, tasks as llm_tasks
+        from laptop.llm.schemas import Category
+        from unittest.mock import patch
+
         llm_api.set_mock_mode(True)
         self.cam.start()
         try:
@@ -74,6 +77,14 @@ class TestCommands(unittest.TestCase):
             self.assertIn("11 cm", out)
             self.assertIsNotNone(self.mission.last_processed_frame)
             self.assertTrue(self.mission.last_processed_name.startswith("classified_"))
+
+            with patch.object(
+                llm_tasks,
+                "classify_object",
+                return_value=Category(category="None", color=None, height_cm=None),
+            ):
+                empty_out = self.dispatcher.execute("Classify")
+            self.assertEqual(empty_out, "Classification: None (empty box)")
 
             meas_out = self.dispatcher.execute("Measure cup")
             self.assertIn("Measure Result:", meas_out)

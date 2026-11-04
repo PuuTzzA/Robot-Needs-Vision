@@ -172,6 +172,49 @@ class TestMissionWorkflows(unittest.TestCase):
         self.assertIn("Finished Level 2", self.mission.announcer.history)
         print(f"[TEST PASS] Level 2 Verified: {result}")
 
+    def test_empty_box_none_option_in_level1_and_level2(self):
+        """Test empty boxes ('None') are reported cleanly in Level 1 and skipped without false match in Level 2."""
+        from laptop.llm.schemas import Category
+
+        # 1. Level 1: Point B is empty, Point E has a Banana (15 cm)
+        def mock_lvl1_classify(_photo_bytes: bytes, point_name: str) -> Category:
+            if point_name == "B":
+                return Category(category="None", color=None, height_cm=None)
+            return Category(category="Banana", color="yellow", height_cm=15.0)
+
+        with patch.object(llm_tasks, "classify_object", side_effect=mock_lvl1_classify):
+            self.assertTrue(self.mission.start_level(1))
+            t_end = time.time() + 20.0
+            while self.mission.is_running() and time.time() < t_end:
+                time.sleep(0.05)
+
+        self.assertFalse(self.mission.is_running(), "Level 1 empty-box test timed out")
+        lvl1_result = self.mission.level_results.get(1, "")
+        self.assertEqual(lvl1_result, "Point B: None, Point E: Banana (15 cm)")
+
+        # 2. Level 2: Points B and C are empty ('None'), Point D has Cup and Point E has Book
+        visited_lvl2: list[str] = []
+
+        def mock_lvl2_classify(_photo_bytes: bytes, point_name: str) -> Category:
+            visited_lvl2.append(point_name)
+            if point_name in ("B", "C"):
+                return Category(category="None", color=None, height_cm=None)
+            if point_name == "D":
+                return Category(category="Mug/Cup", color="white", height_cm=11.0)
+            return Category(category="Book", color="red", height_cm=22.0)
+
+        with patch.object(llm_tasks, "classify_object", side_effect=mock_lvl2_classify):
+            self.assertTrue(self.mission.start_level(2))
+            t_end = time.time() + 20.0
+            while self.mission.is_running() and time.time() < t_end:
+                time.sleep(0.05)
+
+        self.assertFalse(self.mission.is_running(), "Level 2 empty-box test timed out")
+        self.assertEqual(visited_lvl2, ["B", "C", "D", "E"])
+        lvl2_result = self.mission.level_results.get(2, "")
+        self.assertIn("Cup at Point D", lvl2_result)
+        self.assertIn("Book at Point E", lvl2_result)
+
     def test_level_3_async_legibility_immediate_preview_and_parallel_return(self):
         """Test Level 3: async legibility while driving, immediate raw preview -> depth bbox replacement, 1-shot sentence solve."""
         orig_measure = self.size_link.measure

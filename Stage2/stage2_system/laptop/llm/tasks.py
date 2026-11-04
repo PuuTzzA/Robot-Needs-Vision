@@ -12,6 +12,7 @@ from .prompts import (
     LEVEL2_TASK_PROMPT,
     LEVEL3_LEGIBILITY_PROMPT,
     LEVEL3_SOLVE_PROMPT_TEMPLATE,
+    NO_OBJECT_CATEGORY,
 )
 from .schemas import (
     Categories,
@@ -19,6 +20,7 @@ from .schemas import (
     Level3Solution,
     TaskLegibility,
     Waypoints,
+    is_none_category,
 )
 
 
@@ -38,8 +40,12 @@ def parse_level1_task(task_photo_bytes: bytes, known_locations: list[str]) -> li
 
 
 def classify_object(photo_bytes: bytes, point_name: str) -> Category:
-    """Identify the category, color, and estimated height of the object at point_name from a photo."""
-    cat_str = "\n".join(f"- {c}" for c in KNOWN_OBJECT_CATEGORIES)
+    """Identify the category, color, and estimated height of the object at point_name (or 'None' if empty)."""
+    cat_entries = [
+        *KNOWN_OBJECT_CATEGORIES,
+        f"{NO_OBJECT_CATEGORY} (no object — the pedestal/box is empty)",
+    ]
+    cat_str = "\n".join(f"- {c}" for c in cat_entries)
     prompt = CLASSIFY_OBJECT_PROMPT.format(point=point_name, categories_list=cat_str)
     images = [LabeledImage(label=f"photo_point_{point_name}", jpeg_bytes=photo_bytes)]
 
@@ -48,6 +54,12 @@ def classify_object(photo_bytes: bytes, point_name: str) -> Category:
         images=images,
         response_model=Category,
     )
+    if res.is_empty:
+        res.category = NO_OBJECT_CATEGORY
+        res.color = None
+        res.height_cm = None
+    else:
+        res.category = res.category.strip()
     return res
 
 
@@ -62,7 +74,11 @@ def parse_level2_task(task_photo_bytes: bytes) -> list[str]:
         images=images,
         response_model=Categories,
     )
-    return [cat.category.strip() for cat in res.categories if cat.category.strip()]
+    return [
+        cat.category.strip()
+        for cat in res.categories
+        if cat.category.strip() and not is_none_category(cat.category)
+    ]
 
 
 def check_level3_legibility(task_photo_bytes: bytes) -> TaskLegibility:
